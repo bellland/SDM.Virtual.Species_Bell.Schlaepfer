@@ -119,7 +119,7 @@ keepPart <- FALSE #if TRUE, keep all the evaluation numbers for each site as par
 
 
 ## Define set of biomod runs
-runRequests <- expand.grid(sdm.models, names(mlevels), types, error,1:presenceRealizationsN, 1:biomod2.NbRunEval, stringsAsFactors=FALSE, KEEP.OUT.ATTRS=FALSE)
+runRequests <- expand.grid(sdm.models, names(mlevels), types, errors,1:presenceRealizationsN, 1:biomod2.NbRunEval, stringsAsFactors=FALSE, KEEP.OUT.ATTRS=FALSE)
 colnames(runRequests) <- c("models", "mlevels", "types", "errors","realizations", "run")
 runRequestsIDs <- apply(runRequests, MARGIN=1, FUN=function(x) paste(trim(x), collapse="_"))
 
@@ -184,7 +184,7 @@ if(identical(parallel_backend, "mpi")){
 
 ####### Functions
 
-source()
+source(path.functions)
 
 ################
 ## Read data from files once and generate observations
