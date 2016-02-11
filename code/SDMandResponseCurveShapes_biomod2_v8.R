@@ -103,7 +103,7 @@ biomod2.NbRunEval <- switch(EXPR=paste0("v_", date.run),
                             v_20140321=50,
                             v_20140627=25,
                             v_20150130=25,
-                            v_20160209=10)
+                            v_20160209=4)
 presenceRealizationsN <- switch(EXPR=paste0("v_", date.run),
                                 v_20140228=40,
                                 v_20140304=5,
@@ -112,7 +112,7 @@ presenceRealizationsN <- switch(EXPR=paste0("v_", date.run),
                                 v_20140321=40,
                                 v_20140627=25,
                                 v_20150130=25,
-                                v_20160209=10)
+                                v_20160209=4)
 predictorsN <- 10
 equalSamples <- FALSE #if TRUE, ensures that subsamples have the same number of presences as absences
 keepPart <- FALSE #if TRUE, keep all the evaluation numbers for each site as part of the variance partitioning
@@ -342,13 +342,21 @@ if(do.Partition){
       
       fit <- aov(y ~ factor(types)*factor(errors)*factor(models)*factor(mlevels) + Error(realizations),data=tmp) 
       
-      prop <- as.data.frame(matrix(NA,nrow=9,ncol=3))
+      fnames <- rownames(summary(fit)[[1]][[1]])
+        ftmp <- strsplit(fnames,split = c("\\:"))
+        for(ff in 1:(length(ftmp)-1)){
+          for(hh in 1:length(ftmp[[ff]])){
+            htmp <- strsplit(ftmp[[ff]][hh],split=NULL)[[1]][-(1:6)]
+            ftmp[[ff]][hh] <- paste(htmp[htmp != ")" & htmp != "(" & htmp!= " "],collapse="")
+          }
+          htmp <- strsplit(ftmp[[ff]][hh],split=NULL)[[1]]
+          ftmp[[length(ftmp)]] <- paste(htmp[htmp!= " "],collapse="")
+        }
+      fnames <- c("realizations",unlist(lapply(ftmp,paste, collapse=":")))
+      
+      prop <- as.data.frame(matrix(NA,nrow=length(fnames),ncol=3))
       colnames(prop) <- c('factor','SS','prop')
-      prop[,1] <- c('realizations','types','errors','models','mlevels','types:errors','types:models',
-                    'types:mlevels','errors:models','errors:mlevels','models:mlevels',
-                    'types:errors:models','types:error:mlevels','types:models:mlevels','error:models:mlevels',
-                    'types:errors:models:mlevels',
-                    'Residuals')
+      prop[,1] <- fnames
       
       #extract sum of squares
       prop[-1,2] <- summary(fit)[[1]][[1]][,2]
@@ -379,10 +387,10 @@ if(do.Partition){
   
   save(part.region, file=file.path(dir.dat, filename.saveParts))
   
-  var.sort <- c(2:8,1,9)
+  var.sort <- c(2:(length(fnames)-1),1,length(fnames))
   reg.sort <- c(2,1,3,4)
   
-  part.mat <- matrix(NA,nrow=20,ncol=11)
+  part.mat <- matrix(NA,nrow=length(reg.sort)*length(variables),ncol=length(var.sort))
     colnames(part.mat) <- c('region','metric',(part.region[[1]][[2]]$prop[var.sort,1]))
     part.mat[,'region'] <- rep(c('NR','SR','SW','GP'),each=5)
     part.mat[,'metric'] <- rep(variables,times=4)
