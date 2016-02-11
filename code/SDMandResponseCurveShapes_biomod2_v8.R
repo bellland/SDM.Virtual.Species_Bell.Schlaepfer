@@ -349,9 +349,11 @@ if(do.Partition){
             htmp <- strsplit(ftmp[[ff]][hh],split=NULL)[[1]][-(1:6)]
             ftmp[[ff]][hh] <- paste(htmp[htmp != ")" & htmp != "(" & htmp!= " "],collapse="")
           }
-          htmp <- strsplit(ftmp[[ff]][hh],split=NULL)[[1]]
-          ftmp[[length(ftmp)]] <- paste(htmp[htmp!= " "],collapse="")
         }
+      
+      htmp <- strsplit(ftmp[[length(ftmp)]][1],split=NULL)[[1]]
+      ftmp[[length(ftmp)]] <- paste(htmp[htmp!= " "],collapse="")
+      
       fnames <- c("realizations",unlist(lapply(ftmp,paste, collapse=":")))
       
       prop <- as.data.frame(matrix(NA,nrow=length(fnames),ncol=3))
