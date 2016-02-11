@@ -390,16 +390,16 @@ if(do.Partition){
   var.sort <- c(2:(length(fnames)-1),1,length(fnames))
   reg.sort <- c(2,1,3,4)
   
-  part.mat <- matrix(NA,nrow=length(reg.sort)*length(variables),ncol=length(var.sort))
+  part.mat <- matrix(NA,nrow=length(reg.sort)*length(variables),ncol=length(var.sort)+2)
     colnames(part.mat) <- c('region','metric',(part.region[[1]][[2]]$prop[var.sort,1]))
-    part.mat[,'region'] <- rep(c('NR','SR','SW','GP'),each=5)
-    part.mat[,'metric'] <- rep(variables,times=4)
+    part.mat[,'region'] <- rep(c('NR','SR','SW','GP'),each=length(variables))
+    part.mat[,'metric'] <- rep(variables,times=length(regions))
   
   for(j in 1:length(reg.sort))
     for(i in 1:length(variables))
-      part.mat[which(part.mat[,'metric'] == variables[i])[j],3:11] <- (part.region[[reg.sort[j]]][[i]]$prop[var.sort,3])
+      part.mat[which(part.mat[,'metric'] == variables[i])[j],2+1:length(var.sort)] <- (part.region[[reg.sort[j]]][[i]]$prop[var.sort,3])
   
-  write.csv(part.mat,"var.part.csv",quote=FALSE)
+  write.csv(part.mat,file.path(dir.out,"var.part.csv"),quote=FALSE)
   
   print(paste(Sys.time(), ": Partition done"))
   
