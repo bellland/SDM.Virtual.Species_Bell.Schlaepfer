@@ -130,6 +130,18 @@ set_options <- function(model, level=c("linear", "squared", "interaction")){
     bopt <- gamOptions
   }
   
+  if ("MaxEnt" %in% model) {
+  	stop("MaxEnt not yet implemented")
+  }
+
+  if ("RF" %in% model) {
+  	stop("RF not yet implemented")
+  }
+
+  if ("BRT" %in% model) {
+  	stop("BRT not yet implemented")
+  }
+  
   return(bopt)
 }
 
@@ -226,6 +238,7 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
                         #mustart = rep(bopt$mustart,nrow(data.tmp)),
                         control = bopt$control,
                         x = FALSE, y = FALSE)
+    bsdms$DEV <- deviance(bsdms)
   }
   
   if(model == 'GAM'){
@@ -233,7 +246,22 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
                        family = bopt$family,
                        data = data.tmp,
                        control = bopt$control)
+    bsdms$DEV <- deviance(bsdms)
   }
+
+  
+  if (model == "MaxEnt") {
+  	stop("MaxEnt not yet implemented")
+  }
+
+  if (model == "RF") {
+  	stop("RF not yet implemented")
+  }
+
+  if (model == "BRT") {
+  	stop("BRT not yet implemented")
+  }
+
   
   ##evaluate models and get cutoffs
   
@@ -315,7 +343,6 @@ make.SDM <- function(i){
   bopt <- set_options(model=model, level=mlevels[[mlevel]])
   
   bresM$SDMs <- calc_sdms(type=type, error = error, model=model, bdat=bdat, bopt=bopt, eval.methods = eval.methods) 
-  bresM$SDMs$DEV <- deviance(bresM$SDMs)
   
   #Project model onto all regions and for response curve plots
   bresM$Proj <- bresM$ResponseCurvePreds <- vector(mode="list", length=length(regions))

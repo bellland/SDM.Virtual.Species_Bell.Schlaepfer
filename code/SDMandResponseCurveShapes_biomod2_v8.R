@@ -67,13 +67,14 @@ date.run <- "20160209" #label for output folders (20140228; 20140304; 20140314; 
 
 ## Directories
 computer <- "Daniel" # "Dave"
+
 if (computer == "Dave") {
 	dir.prj <- "E:/Work_Share_Dave_SDM&ResponseCurves"
-	path.functions <-"E:/Dropbox/Work_Share_Dave_SDM&ResponseCurves/BIOMOD2/SDMandResponseCurveShapes_Functions.R" 
+	path.functions <-"E:/Dropbox/Work_Share_Dave_SDM&ResponseCurves/BIOMOD2" 
 	dir.loc <- dir.prj
 } else if (computer == "Daniel") {
 	dir.prj <- "~/Dropbox/Work_Stuff/2_Research/200907_UofWyoming_PostDoc/Product21_SDM_AsymmetryResponseCurve/3_Simulations"
-	path.functions <- file.path(dir.prj, "SDM.Virtual.Species_Bell.Schlaepfer", "code", "SDMandResponseCurveShapes_Functions.R")
+	path.functions <- file.path(dir.prj, "SDM.Virtual.Species_Bell.Schlaepfer", "code")
 	dir.loc <- dir.prj
 	#dir.prj <- "/Users/drschlaep/Dropbox/Work_Share_Dave_SDM&ResponseCurves"
 	#dir.loc <- "/Users/drschlaep/Documents/drschlaepfer/2_Research/200907_UofWyoming_PostDoc/Projects_My/Product21_SDM_AsymmetryResponseCurve/2_Data"
@@ -101,6 +102,7 @@ regions <- 1:4
 types <- c("AIF", "SCT", "SIF", "SIT")
 mlevels <- list(woInt=c("linear", "squared"), wInt=c("linear", "squared", "interaction"))
 sdm.models <- c("GLM", "GAM")
+	sdm.models <- c("GLM", "GAM", "MaxEnt", "RF", "BRT")
 eval.methods <- c('TSS','ROC','KAPPA')
 errors <- c("binom","binom+res","spatial","spatial+res")
 biomod2.NbRunEval <- switch(EXPR=paste0("v_", date.run),
@@ -192,17 +194,15 @@ if(identical(parallel_backend, "mpi")){
 
 ####### Functions
 
-source(path.functions)
+source(file.path(path.functions, "SDMandResponseCurveShapes_Functions.R"))
 
 ################
 ## Read data from files once and generate observations
 if(file.exists(ftemp <- file.path(dir.in, filename.saveTypeData))){
   load(ftemp)
 } else {
-  var.obs <- c("binom", "binom+res", "spatial", "spatial+res")
-  
-  tname <- paste(rep(types,times=length(var.obs)),rep(var.obs,each=length(types)),sep="_")
-  tmat <- cbind(type=rep(types,times=length(var.obs)),var=rep(var.obs,each=length(types)))
+  tname <- paste(rep(types,times=length(errors)),rep(errors,each=length(types)),sep="_")
+  tmat <- cbind(type=rep(types,times=length(errors)),var=rep(errors,each=length(types)))
   
   typeData <- varData <- obsData <- probData <- vector("list", length=length(tname))
   names(typeData) <- names(varData) <- names(obsData) <- names(probData) <- tname
@@ -252,7 +252,7 @@ if(file.exists(ftemp <- file.path(dir.in, filename.saveTypeData))){
 if(do.SDMs){
   print(paste(Sys.time(), ": SDMs started"))
   
-  source(file.path(dir.prj, "BIOMOD2", "ourResponsePlot2.r"), echo=FALSE, keep.source=FALSE)
+  source(file.path(path.functions, "ourResponsePlot2.r"), echo=FALSE, keep.source=FALSE)
   
   list.export <- c("libraries", "climData", "obsData", "probData", "centerMeansData", 
                    "runRequests", "baseRegion", "regions", "mlevels", "sdm.models", 
