@@ -66,11 +66,19 @@ temp <- lapply(libraries, FUN=require, character.only=TRUE)
 date.run <- "20160209" #label for output folders (20140228; 20140304; 20140314; 20140320; 20140321; 20140627; 20150130)
 
 ## Directories
-dir.prj <- "E:/Work_Share_Dave_SDM&ResponseCurves"
-path.functions <-"E:/Dropbox/Work_Share_Dave_SDM&ResponseCurves/BIOMOD2/SDMandResponseCurveShapes_Functions.R" 
-#dir.prj <- "/Users/drschlaep/Dropbox/Work_Share_Dave_SDM&ResponseCurves"
-dir.loc <- dir.prj
-#dir.loc <- "/Users/drschlaep/Documents/drschlaepfer/2_Research/200907_UofWyoming_PostDoc/Projects_My/Product21_SDM_AsymmetryResponseCurve/2_Data"
+computer <- "Daniel" # "Dave"
+if (computer == "Dave") {
+	dir.prj <- "E:/Work_Share_Dave_SDM&ResponseCurves"
+	path.functions <-"E:/Dropbox/Work_Share_Dave_SDM&ResponseCurves/BIOMOD2/SDMandResponseCurveShapes_Functions.R" 
+	dir.loc <- dir.prj
+} else if (computer == "Daniel") {
+	dir.prj <- "~/Dropbox/Work_Stuff/2_Research/200907_UofWyoming_PostDoc/Product21_SDM_AsymmetryResponseCurve/3_Simulations"
+	path.functions <- file.path(dir.prj, "SDM.Virtual.Species_Bell.Schlaepfer", "code", "SDMandResponseCurveShapes_Functions.R")
+	dir.loc <- dir.prj
+	#dir.prj <- "/Users/drschlaep/Dropbox/Work_Share_Dave_SDM&ResponseCurves"
+	#dir.loc <- "/Users/drschlaep/Documents/drschlaepfer/2_Research/200907_UofWyoming_PostDoc/Projects_My/Product21_SDM_AsymmetryResponseCurve/2_Data"
+} else stop(computer, " is not implemented")
+
 dir.in <- file.path(dir.prj, "data", "csv.files")
 dir.gis <- file.path(dir.prj, "data", "rasters")
 dir.sdm <- file.path(ifelse(do.ExampleForDropbox, dir.prj, dir.loc), ifelse(do.ExampleForDropbox, "dataExample", "data"), ifelse(do.ExampleForDropbox, "biomodSDMsExample", paste("biomodSDMs",date.run,sep="_")))
@@ -191,6 +199,7 @@ source(path.functions)
 if(file.exists(ftemp <- file.path(dir.in, filename.saveTypeData))){
   load(ftemp)
 } else {
+  var.obs <- c("binom", "binom+res", "spatial", "spatial+res")
   
   tname <- paste(rep(types,times=length(var.obs)),rep(var.obs,each=length(types)),sep="_")
   tmat <- cbind(type=rep(types,times=length(var.obs)),var=rep(var.obs,each=length(types)))
@@ -222,6 +231,8 @@ if(file.exists(ftemp <- file.path(dir.in, filename.saveTypeData))){
                                                           VAR=varData[[tname[tp]]],
                                                           sigma = sigma,
                                                           w = w)
+    if (is.null(obsData[[tname[tp]]]))
+    	stop("Call to 'calc_ObservationsFromProbabilities' with variance type = ", varData[[tname[tp]]], " failed for tname[", tp, "] = ", tname[tp])
   }
   
   rm(list = c("dtmp", "kk"))
