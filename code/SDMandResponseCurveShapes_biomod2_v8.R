@@ -424,7 +424,7 @@ png(paste(dir.out,"DF.png",sep="/"),width=6,height=4,units="in",res=600)
 par(mar=c(8,4,1,1))
 tmp <- boxplot(edf ~ apply(runRequests[,1:3],1,paste,collapse="_"),axes=FALSE,frame.plot=TRUE)
 axis(2)
-axis(1,at = 1:16, labels = tmp$names,las=3)
+axis(1,at = 1:length(tmp$names), labels = tmp$names,las=3,cex.axis=.85)
 mtext("Degrees of Freedom",side=2,line=2.5)
 dev.off()
 
@@ -529,9 +529,9 @@ if(do.EvaluationSummary){
   }
   
   #Fill evaluation arrays with values from bres
-  evalA_SDMs <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(sdm.models), length(eval.methods)+1, 2), dimnames=list(types, names(mlevels), sdm.models, c(eval.methods, "Deviance"), c("mean", "sd")))
-  evalA_Proj <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(regions), length(sdm.models), length(eval.methods)+2, 2), dimnames=list(types, names(mlevels), paste0("region", regions), sdm.models, c(eval.methods, "RMSE", "MAE"), c("mean", "sd")))
-  evalA_ProjDiffs <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(regions), length(sdm.models), length(eval.methods)+2, 2), dimnames=list(types, names(mlevels), paste0("region", regions), sdm.models, c(eval.methods, "RMSE", "MAE"), c("mean", "sd")))
+  evalA_SDMs <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(sdm.models), length(eval.methods)+1, 2), dimnames=list(types,errors, names(mlevels), sdm.models, c(eval.methods, "Deviance"), c("mean", "sd")))
+  evalA_Proj <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(regions), length(sdm.models), length(eval.methods)+2, 2), dimnames=list(types,errors, names(mlevels), paste0("region", regions), sdm.models, c(eval.methods, "RMSE", "MAE"), c("mean", "sd")))
+  evalA_ProjDiffs <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(regions), length(sdm.models), length(eval.methods)+2, 2), dimnames=list(types,errors, names(mlevels), paste0("region", regions), sdm.models, c(eval.methods, "RMSE", "MAE"), c("mean", "sd")))
   
   for(i in evalIDs){
     evalID <- evalIDs[i]
@@ -552,9 +552,9 @@ if(do.EvaluationSummary){
   }
   
   #Reshape arrays into matrices
-  evalT_SDMs <- acast(melt(evalA_SDMs), formula=Var1+Var2+Var3~Var4+Var5)
-  evalT_Proj <- acast(melt(evalA_Proj), formula=Var1+Var2+Var3+Var4~Var5+Var6)
-  evalT_ProjDiffs <- acast(melt(evalA_ProjDiffs), formula=Var1+Var2+Var3+Var4~Var5+Var6)
+  evalT_SDMs <- acast(melt(evalA_SDMs), formula=Var1+Var2+Var3+Var4~Var5+Var6)
+  evalT_Proj <- acast(melt(evalA_Proj), formula=Var1+Var2+Var3+Var4+Var5~Var6+Var7)
+  evalT_ProjDiffs <- acast(melt(evalA_ProjDiffs), formula=Var1+Var2+Var3+Var4+Var5~Var6+Var7)
   
   write.csv(evalT_SDMs, file=file.path(dir.tables, "Table_EvaluationModels.csv"))
   write.csv(evalT_Proj, file=file.path(dir.tables, "Table_EvaluationProjections.csv"))
