@@ -24,6 +24,8 @@ rmat  <- function(n, rho = 0.9) {
 
 ## Functions to read specimen data
 calc_ObservationsFromProbabilities <- function(probs, N, VAR, sigma,w){###need to incorporate long and Lat
+  obs <- NULL
+  
   #no residual variance, just a straight binomial draw
   if(VAR == "binom")
     obs <- t(sapply(probs, FUN=function(x) rbinom(n=N, size=1, prob=x))) #N Bernoulli draws
