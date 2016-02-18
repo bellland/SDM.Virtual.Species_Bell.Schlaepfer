@@ -192,8 +192,8 @@ if(file.exists(ftemp <- file.path(dir.in, filename.saveTypeData))){
   load(ftemp)
 } else {
   
-  tname <- paste(rep(types,times=length(var.obs)),rep(var.obs,each=length(types)),sep="_")
-  tmat <- cbind(type=rep(types,times=length(var.obs)),var=rep(var.obs,each=length(types)))
+  tname <- paste(rep(types,times=length(errors)),rep(var.obs,each=length(types)),sep="_")
+  tmat <- cbind(type=rep(types,times=length(errors)),var=rep(var.obs,each=length(types)))
   
   typeData <- varData <- obsData <- probData <- vector("list", length=length(tname))
   names(typeData) <- names(varData) <- names(obsData) <- names(probData) <- tname
