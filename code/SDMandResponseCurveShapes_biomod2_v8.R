@@ -60,7 +60,8 @@ do.Figures <- TRUE
 
 ##
 ## Biomod2
-libraries <- c("reshape2", "mgcv", "seqinr", "raster","parallel","mvtnorm")  ##"biomod2", ##
+libraries <- c("reshape2", "mgcv", "seqinr", "raster","parallel","mvtnorm")
+	libraries <- c(libraries, "randomForest", "GBM", "maxent")
 temp <- lapply(libraries, FUN=require, character.only=TRUE)
 
 date.run <- "20160209" #label for output folders (20140228; 20140304; 20140314; 20140320; 20140321; 20140627; 20150130)

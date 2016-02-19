@@ -106,12 +106,12 @@ set_options <- function(model, level=c("linear", "squared", "interaction")){
     if(any(level == "squared")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(LnPScaled * LnPScaled) + I(MinTScaled * MinTScaled)")
     if(any(level == "interaction")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(MinTScaled * LnPScaled)")
     formGLM <- formula(paste0("eval(parse(text=type)) ~ ", term))
-    glmOptions <- list(myFormula=formGLM,
-                       test="none",
-                       family=binomial(link = 'logit'),
-                       mustart=0.5,
-                       control=glm.control(epsilon = 1e-06, trace = FALSE, maxit = 100))
-    bopt <- glmOptions
+   
+    bopt <- list(myFormula=formGLM,
+				   test="none",
+				   family=binomial(link = 'logit'),
+				   mustart=0.5,
+				   control=glm.control(epsilon = 1e-06, trace = FALSE, maxit = 100))
   }
   
   if("GAM" %in% model){ #GAM options
@@ -119,30 +119,83 @@ set_options <- function(model, level=c("linear", "squared", "interaction")){
     if(any(level == "linear")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "s(LnP) + s(MinT)")
     if(any(level == "interaction")) term <- paste0("","ti(MinTScaled, LnPScaled)")
     formGAM <- formula(paste0("eval(parse(text=type)) ~ ", term))
-    gamOptions <- list(myFormula=formGAM,
-                       algo='GAM_mgcv',
-                       k=NULL,                    
-                       family=binomial(link = 'logit'),
-                       control=gam.control(epsilon = 1e-06, 
-                                           trace = FALSE, 
-                                           maxit = 100,
-                                           keepData=TRUE))
-    bopt <- gamOptions
+   
+    bopt <- list(myFormula=formGAM,
+				   algo='GAM_mgcv',
+				   k=NULL,                    
+				   family=binomial(link = 'logit'),
+				   control=gam.control(epsilon = 1e-06, 
+									   trace = FALSE, 
+									   maxit = 100,
+									   keepData=TRUE))
   }
   
-  if ("MaxEnt" %in% model) {
-  	stop("MaxEnt not yet implemented")
+  if ("MaxEnt" %in% model) { # This is the Tsuruoka and not the Phillips implementation of MaxEnt!
+	term <- NULL
+	if (any(level == "linear")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "LnP + MinT")
+#    if (any(level == "squared")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(LnPScaled * LnPScaled) + I(MinTScaled * MinTScaled)")
+#    if (any(level == "interaction")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(MinTScaled * LnPScaled)")
+    formMET <- formula(paste0("eval(parse(text=type)) ~ ", term))
+
+ 	# http://www.nactem.ac.uk/tsuruoka/maxent/
+	#    supporting L1/L2 regularization [1,2]
+	#    supporting fast parameter estimation algorithms (LBFGS [3], OWLQN [4], and SGD [5])
+	#    supporting real-valued features
+    #[1] Jun'ichi Kazama and Jun'ichi Tsujii. 2003. Evaluation and Extension of Maximum Entropy Models with Inequality Constraints, In Proceedings of EMNLP, pp. 137-144.
+	#[2] Stanley F. Chen and Ronald Rosenfeld. 1999. A Gaussian Prior for Smoothing Maximum Entropy Models, Technical Report CMU-CS-99-108, Computer Science Department, Carnegie Mellon University.
+	#[3] Jorge Nocedal. 1980. Updating Quasi-Newton Matrices with Limited Storage, Mathematics of Computation, Vol. 35, No. 151, pp. 773-782.
+	#[4] Galen Andrew and Jianfeng Gao. 2007. Scalable training of L1-regularized log-linear models, In Proceedings of ICML.
+	#[5] Yoshimasa Tsuruoka, Jun'ichi Tsujii, and Sophia Ananiadou. 2009. Stochastic Gradient Descent Training for L1-regularized Log-linear Models with Cumulative Penalty, In Proceedings of ACL-IJCNLP, pp. 477-485
+	
+	#Yoshimasa Tsuruoka recommends using one of following three methods if you see overfitting.
+	#1. Set the l1_regularizer parameter to 1.0, leaving l2_regularizer and set_heldout as default.
+	#2. Set the l2_regularizer parameter to 1.0, leaving l1_regularizer and set_heldout as default.
+	#3. Set the set_heldout parameter to hold-out a portion of your data, leaving l1_regularizer and l2_regularizer as default.
+	#If you are using a large number of training samples, try setting the use_sgd parameter to TRUE.
+
+	bopt <- list(myFormula = formMET,
+				l1_regularizer = 1,
+				l2_regularizer = 0,
+				use_sgd = TRUE, # SGD = stochastic gradient descent
+				set_heldout = 0)
   }
 
   if ("RF" %in% model) {
-  	stop("RF not yet implemented")
+    term <- NULL
+    if (any(level == "linear")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "LnP + MinT")
+#    if (any(level == "squared")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(LnPScaled * LnPScaled) + I(MinTScaled * MinTScaled)")
+#    if (any(level == "interaction")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(MinTScaled * LnPScaled)")
+    formRF <- formula(paste0("eval(parse(text=type)) ~ ", term))
+
+	# Breiman, L (2002), “Manual On Setting Up, Using, And Understanding Random Forests V3.1”, https://www.stat.berkeley.edu/~breiman/Using_random_forests_V3.1.pdf
+	# Cutler, D. R., T. C. Edwards, K. H. Beard, A. Cutler, K. T. Hess, J. Gibson, and J. J. Lawler. 2007. Random forests for classification in ecology. Ecology 88:2783-2792.
+	bopt <- list(myFormula = formRF,
+                      ntree = 500, # Number of trees to grow. This should not be set to too small a number, to ensure that every input row gets predicted at least a few times.; Cutler et al. 2007: even ntree = 50 produced quite stable results
+                      mtry = 'default', # 'default' for classification (sqrt(p) where p is number of variables in x); Cutler et al. 2007: RF is insensitive to mtry
+                      nodesize = 5, #NOTE: randomForest's default for classification is 1 (which Breiman 2002 recommends); biomod2 sets it to 5. Minimum size of terminal nodes. Setting this number larger causes smaller trees to be grown (and thus take less time). Note that the default values are different for classification (1) and regression (5).
+                      maxnodes = NULL)
   }
 
   if ("BRT" %in% model) {
-  	stop("BRT not yet implemented")
+    term <- NULL
+    if (any(level == "linear")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "LnP + MinT")
+    if (any(level == "squared")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(LnPScaled * LnPScaled) + I(MinTScaled * MinTScaled)")
+#    if (any(level == "interaction")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(MinTScaled * LnPScaled)")
+    formBRT <- formula(paste0("eval(parse(text=type)) ~ ", term))
+
+	bopt <- list(myFormula = formBRT,
+						n.trees = 2500,
+						interaction.depth = if (any(level == "interaction")) 2L else 1L,
+						n.minobsinnode = 5,
+						shrinkage = 0.001,
+						bag.fraction = 0.5,
+						train.fraction = 1,
+						cv.folds = 1, #NOTE: biomod2 has this set to 3
+						keep.data = FALSE,
+						verbose = FALSE)
   }
   
-  return(bopt)
+  bopt
 }
 
 #calculate cutoff based on maximizing TSS
@@ -229,7 +282,7 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
   data.tmp <- cbind(bdat$resp.var,bdat$expl.var)
   colnames(data.tmp)[1] <- type
   eval.tmp <- cbind(bdat$eval.resp.var,bdat$eval.expl.var)
-  colnames(data.tmp)[1] <- type
+  colnames(eval.tmp)[1] <- type
   
   if(model == 'GLM'){
     bsdms <- stats::glm(formula = bopt$myFormula,
@@ -251,15 +304,48 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
 
   
   if (model == "MaxEnt") {
+  	# http://www.nactem.ac.uk/tsuruoka/maxent/
+  	
+  	warning("This is the Tsuruoka and not the Phillips implementation of MaxEnt!")
+  	bsdms <- maxent::maxent(feature_matrix = data.tmp[, -1],
+							code_vector = as.factor(data.tmp[, 1],
+							l1_regularizer = bopt$l1_regularizer,
+							l2_regularizer = bopt$l2_regularizer,
+							use_sgd = bopt$use_sgd,
+							set_heldout = bopt$set_heldout,
+							verbose = FALSE)
+  	
+    bsdms$DEV <- NA
   	stop("MaxEnt not yet implemented")
   }
 
   if (model == "RF") {
-  	stop("RF not yet implemented")
+  	bsdms <- randomForest::randomForest(x = data.tmp[, -1], y = as.factor(data.tmp[, 1], #classification random.forest: y must be a factor
+# 										formula = bopt$myFormula, #For large data sets, especially those with large number of variables, calling randomForest via the formula interface is not advised: There may be too much overhead in handling the formula.
+#  										data = data.tmp,
+  										ntree = bopt$ntree,
+  										importance = FALSE,
+  										norm.votes = TRUE,
+#										strata = factor(c(0, 1)), # TODO: biomod2 sets this: why? should we too?
+  										nodesize = bopt$nodesize,
+  										maxnodes = bopt$maxnodes)
+  	
+  	bsdms$DEV <- NA
   }
 
   if (model == "BRT") {
-  	stop("BRT not yet implemented")
+	bsdms <- gbm::gbm(formula = bopt$myFormula,
+  						distribution = "bernoulli",
+  						data = data.tmp,
+            			n.trees = bopt$n.trees, 
+            			cv.folds = bopt$cv.folds,
+            			interaction.depth = bopt$interaction.depth, 
+            			n.minobsinnode = bopt$n.minobsinnode,
+            			shrinkage = bopt$shrinkage, 
+            			bag.fraction = bopt$bag.fraction,
+            			train.fraction = bopt$train.fraction, 
+            			verbose = FALSE)
+  	bsdms$DEV <- NA
   }
 
   
