@@ -61,7 +61,7 @@ do.Figures <- TRUE
 ##
 ## Biomod2
 libraries <- c("reshape2", "mgcv", "seqinr", "raster","parallel","mvtnorm")
-	libraries <- c(libraries, "randomForest", "GBM", "maxent")
+	libraries <- c(libraries, "randomForest", "gbm", "maxent")
 temp <- lapply(libraries, FUN=require, character.only=TRUE)
 
 date.run <- "20160209" #label for output folders (20140228; 20140304; 20140314; 20140320; 20140321; 20140627; 20150130)
@@ -422,6 +422,7 @@ if(do.Partition){
 ##Get effective degrees of freedom
 edf <- rep(NA,length(bres))
 
+warning("TODO(drs): fix this; it is now SDMs$m")
 for(ee in 1:length(edf)){
   
   if(runRequests[ee,"models"] == "GAM") edf[ee] <- sum(bres[[ee]]$SDMs$edf)

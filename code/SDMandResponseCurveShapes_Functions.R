@@ -170,7 +170,7 @@ set_options <- function(model, level=c("linear", "squared", "interaction")){
 	# Breiman, L (2002), “Manual On Setting Up, Using, And Understanding Random Forests V3.1”, https://www.stat.berkeley.edu/~breiman/Using_random_forests_V3.1.pdf
 	# Cutler, D. R., T. C. Edwards, K. H. Beard, A. Cutler, K. T. Hess, J. Gibson, and J. J. Lawler. 2007. Random forests for classification in ecology. Ecology 88:2783-2792.
 	bopt <- list(myFormula = formRF,
-                      ntree = 500, # Number of trees to grow. This should not be set to too small a number, to ensure that every input row gets predicted at least a few times.; Cutler et al. 2007: even ntree = 50 produced quite stable results
+                      ntree = 501, # Number of trees to grow. This should not be set to too small a number, to ensure that every input row gets predicted at least a few times.; Cutler et al. 2007: even ntree = 50 produced quite stable results; odd number so that there will be no ties in predictions (which would be broken at random)
                       mtry = 'default', # 'default' for classification (sqrt(p) where p is number of variables in x); Cutler et al. 2007: RF is insensitive to mtry
                       nodesize = 5, #NOTE: randomForest's default for classification is 1 (which Breiman 2002 recommends); biomod2 sets it to 5. Minimum size of terminal nodes. Setting this number larger causes smaller trees to be grown (and thus take less time). Note that the default values are different for classification (1) and regression (5).
                       maxnodes = NULL)
@@ -284,8 +284,10 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
   eval.tmp <- cbind(bdat$eval.resp.var,bdat$eval.expl.var)
   colnames(eval.tmp)[1] <- type
   
+  bsdms <- list()
+  
   if(model == 'GLM'){
-    bsdms <- stats::glm(formula = bopt$myFormula,
+    bsdms$m <- stats::glm(formula = bopt$myFormula,
                         family = bopt$family,
                         data = data.tmp,
                         #mustart = rep(bopt$mustart,nrow(data.tmp)),
@@ -295,7 +297,7 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
   }
   
   if(model == 'GAM'){
-    bsdms <- mgcv::gam(formula = bopt$myFormula,
+    bsdms$m <- mgcv::gam(formula = bopt$myFormula,
                        family = bopt$family,
                        data = data.tmp,
                        control = bopt$control)
@@ -307,8 +309,9 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
   	# http://www.nactem.ac.uk/tsuruoka/maxent/
   	
   	warning("This is the Tsuruoka and not the Phillips implementation of MaxEnt!")
-  	bsdms <- maxent::maxent(feature_matrix = data.tmp[, -1],
-							code_vector = as.factor(data.tmp[, 1],
+  	
+  	bsdms$m <- maxent::maxent(feature_matrix = data.tmp[, -1],
+							code_vector = as.factor(data.tmp[, 1]),
 							l1_regularizer = bopt$l1_regularizer,
 							l2_regularizer = bopt$l2_regularizer,
 							use_sgd = bopt$use_sgd,
@@ -316,27 +319,33 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
 							verbose = FALSE)
   	
     bsdms$DEV <- NA
-  	stop("MaxEnt not yet implemented")
+    
+    pred.obs <- as.numeric(maxent::predict.maxent(bsdms$m, feature_matrix = data.tmp[, -1])[, "1"]) # fitted
+    pred.eval <- as.numeric(maxent::predict.maxent(bsdms$m, feature_matrix = eval.tmp[, -1])[, "1"])
   }
 
   if (model == "RF") {
-  	bsdms <- randomForest::randomForest(x = data.tmp[, -1], y = as.factor(data.tmp[, 1], #classification random.forest: y must be a factor
+  	bsdms$m <- randomForest::randomForest(x = data.tmp[, -1], y = as.factor(data.tmp[, 1]), #classification random.forest: y must be a factor
 # 										formula = bopt$myFormula, #For large data sets, especially those with large number of variables, calling randomForest via the formula interface is not advised: There may be too much overhead in handling the formula.
 #  										data = data.tmp,
   										ntree = bopt$ntree,
   										importance = FALSE,
   										norm.votes = TRUE,
-#										strata = factor(c(0, 1)), # TODO: biomod2 sets this: why? should we too?
+#										strata = factor(c(0, 1)), # NOTE: biomod2 sets this, but it has no influence on result
   										nodesize = bopt$nodesize,
   										maxnodes = bopt$maxnodes)
   	
   	bsdms$DEV <- NA
+    pred.obs <- as.numeric(predict(bsdms$m, newdata = data.tmp[, -1], type = "prob")[, "1"]) # fitted
+    pred.eval <- as.numeric(predict(bsdms$m, newdata = eval.tmp[, -1], type = "prob")[, "1"])
   }
 
   if (model == "BRT") {
-	bsdms <- gbm::gbm(formula = bopt$myFormula,
+stop("TODO(drs): the gbm call gives a weird error message about a missing 'p'???")
+	bsdms$m <- gbm::gbm(formula = bopt$myFormula,
   						distribution = "bernoulli",
   						data = data.tmp,
+  						weights = rep(1, nrow(data.tmp)),
             			n.trees = bopt$n.trees, 
             			cv.folds = bopt$cv.folds,
             			interaction.depth = bopt$interaction.depth, 
@@ -350,12 +359,15 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
 
   
   ##evaluate models and get cutoffs
+  if (model %in% c("GLM", "GAM")) {
+  	pred.eval <- predict(object = bsdms$m, newdata = eval.tmp[,-1], type = 'response', se.fit = FALSE)
+  	pred.obs <- fitted(bsdms$m)
+  }
+
   
-  pred.tmp <- predict(object = bsdms, newdata = eval.tmp[,-1],type = 'response',se.fit = FALSE)
-  
-  bsdms$cutoff <- get.cutoff(pred = fitted(bsdms), obs = data.tmp[,1],
-                             pred.eval = pred.tmp, obs.eval = eval.tmp[,1],
-                             method=eval.methods)	
+  bsdms$cutoff <- get.cutoff(pred = pred.obs, obs = data.tmp[,1],
+                             pred.eval = pred.eval, obs.eval = eval.tmp[,1],
+                             method = eval.methods)	
   
   
   ##return list
@@ -426,9 +438,9 @@ make.SDM <- function(i){
   bresM$centerMeans <- centerMeansData
   bresM$samp <- samp
   
-  bopt <- set_options(model=model, level=mlevels[[mlevel]])
+  bopt <- set_options(model = model, level=  mlevels[[mlevel]])
   
-  bresM$SDMs <- calc_sdms(type=type, error = error, model=model, bdat=bdat, bopt=bopt, eval.methods = eval.methods) 
+  bresM$SDMs <- calc_sdms(type = type, error = error, model = model, bdat = bdat, bopt = bopt, eval.methods = eval.methods) 
   
   #Project model onto all regions and for response curve plots
   bresM$Proj <- bresM$ResponseCurvePreds <- vector(mode="list", length=length(regions))
@@ -443,13 +455,13 @@ make.SDM <- function(i){
     iregion <- (climData[, "region"] == regions[ir])
     newData <- climData[iregion, c("LnP", "LnPScaled", "MinT", "MinTScaled")]
     #Project model onto region
-    bresM$Proj[[ir]]$Proj <- make_projection(bsdm=bresM$SDMs,
+    bresM$Proj[[ir]]$Proj <- make_projection(bsdm=bresM$SDMs$m,
                                              newData=newData,
                                              projName=paste0(model, "_region", regions[ir]))		
     
     #Prepare response curve plot predictions
     bresM$ResponseCurvePreds[[ir]] <- try(our.response.plot2(
-      modelObj=bresM$SDMs, modelName=model,
+      modelObj=bresM$SDMs$m, modelName=model,
       Data=newData,
       orig.variables=orig.variables,
       scaled.variables=scaled.variables,
@@ -462,6 +474,7 @@ make.SDM <- function(i){
   
   
   #clean fitted model objects, i.e., it will NOT work with predict.glm resp. predict.gam
+warning("TODO(drs): fix this; it is now SDMs$m")
   bresM$SDMs <- bresM$SDMs[c('coefficients','DEV','family','cutoff','edf')] #'model'
   
   
