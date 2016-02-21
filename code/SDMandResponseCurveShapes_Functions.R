@@ -190,7 +190,7 @@ set_options <- function(model, level=c("linear", "squared", "interaction")){
 						shrinkage = 0.001,
 						bag.fraction = 0.5,
 						train.fraction = 1,
-						cv.folds = 1, #NOTE: biomod2 has this set to 3
+						cv.folds = 0, #NOTE: biomod2 has this set to 3; 1 expresses a bug in gbm::gbm
 						keep.data = FALSE,
 						verbose = FALSE)
   }
@@ -275,6 +275,28 @@ get.cutoff <- function(pred, obs, pred.eval, obs.eval, method){
   
 }
 
+
+make_prediction <- function(bsdm, newData, bopt) {
+	if (inherits(bsdm, "glm") || inherits(bsdm, "gam")) {
+		preds <- predict(bsdm, newdata = newData, type = 'response', se.fit = FALSE)
+
+	} else if (inherits(bsdm, "maxent")) {
+		preds <- as.numeric(predict(bsdm, feature_matrix = newData)[, "1"])
+
+	} else if (inherits(bsdm, "randomForest")) {
+		preds <- as.numeric(predict(bsdm, newdata = newData, type = "prob")[, "1"])
+    
+    } else if (inherits(bsdm, "gbm")) {
+    	preds <- predict(bsdms$m, newdata = newData, type = "response", n.trees = bopt$n.trees)
+
+	} else {
+		preds <- NULL
+	}	
+	
+	preds
+}
+
+
 #fit model, get cutoff, and evaluation statistics
 calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
   type <<- type	 #Need to pass 'type' because of model formulae
@@ -294,6 +316,9 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
                         control = bopt$control,
                         x = FALSE, y = FALSE)
     bsdms$DEV <- deviance(bsdms)
+    
+  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1], bopt)
+  	pred.obs <- fitted(bsdms$m)
   }
   
   if(model == 'GAM'){
@@ -302,12 +327,13 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
                        data = data.tmp,
                        control = bopt$control)
     bsdms$DEV <- deviance(bsdms)
+    
+  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1], bopt)
+  	pred.obs <- fitted(bsdms$m)
   }
-
   
   if (model == "MaxEnt") {
   	# http://www.nactem.ac.uk/tsuruoka/maxent/
-  	
   	warning("This is the Tsuruoka and not the Phillips implementation of MaxEnt!")
   	
   	bsdms$m <- maxent::maxent(feature_matrix = data.tmp[, -1],
@@ -320,8 +346,8 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
   	
     bsdms$DEV <- NA
     
-    pred.obs <- as.numeric(maxent::predict.maxent(bsdms$m, feature_matrix = data.tmp[, -1])[, "1"]) # fitted
-    pred.eval <- as.numeric(maxent::predict.maxent(bsdms$m, feature_matrix = eval.tmp[, -1])[, "1"])
+  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1], bopt)
+  	pred.obs <- make_prediction(bsdms$m, data.tmp[, -1], bopt)
   }
 
   if (model == "RF") {
@@ -336,18 +362,17 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
   										maxnodes = bopt$maxnodes)
   	
   	bsdms$DEV <- NA
-    pred.obs <- as.numeric(predict(bsdms$m, newdata = data.tmp[, -1], type = "prob")[, "1"]) # fitted
-    pred.eval <- as.numeric(predict(bsdms$m, newdata = eval.tmp[, -1], type = "prob")[, "1"])
+    
+  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1], bopt)
+  	pred.obs <- make_prediction(bsdms$m, data.tmp[, -1], bopt)
   }
 
   if (model == "BRT") {
-stop("TODO(drs): the gbm call gives a weird error message about a missing 'p'???")
 	bsdms$m <- gbm::gbm(formula = bopt$myFormula,
   						distribution = "bernoulli",
   						data = data.tmp,
-  						weights = rep(1, nrow(data.tmp)),
             			n.trees = bopt$n.trees, 
-            			cv.folds = bopt$cv.folds,
+            			cv.folds = bopt$cv.folds, # if cv.folds = 1, then bug in gbm::gbm is expressed and 'p' is not found: as.list(body(gbm::gbm))[[34]] should be {if (cv.folds > 1) gbm.obj$cv.fitted <- p}
             			interaction.depth = bopt$interaction.depth, 
             			n.minobsinnode = bopt$n.minobsinnode,
             			shrinkage = bopt$shrinkage, 
@@ -355,36 +380,28 @@ stop("TODO(drs): the gbm call gives a weird error message about a missing 'p'???
             			train.fraction = bopt$train.fraction, 
             			verbose = FALSE)
   	bsdms$DEV <- NA
+    
+  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1], bopt)
+  	pred.obs <- make_prediction(bsdms$m, data.tmp[, -1], bopt)
   }
 
   
   ##evaluate models and get cutoffs
-  if (model %in% c("GLM", "GAM")) {
-  	pred.eval <- predict(object = bsdms$m, newdata = eval.tmp[,-1], type = 'response', se.fit = FALSE)
-  	pred.obs <- fitted(bsdms$m)
-  }
-
-  
   bsdms$cutoff <- get.cutoff(pred = pred.obs, obs = data.tmp[,1],
                              pred.eval = pred.eval, obs.eval = eval.tmp[,1],
                              method = eval.methods)	
-  
   
   ##return list
   return(bsdms)
 }
 
-make_projection <- function(bsdm, newData, projName){ #Project the SDMs based on one region to the others
-  
-  bproj <- list(projName = projName,
-                pred = as.integer(1000*round(predict(object = bsdm,
-                                                     newdata = newData,
-                                                     type = 'response',
-                                                     se.fit = FALSE),3))
-  )
-  
-  return(bproj)
+
+# Project the SDMs based on one region to the others
+make_projection <- function(bsdm, newData, projName = "", bopt){
+  preds <- make_prediction(bsdm, newData, bopt)
+  list(projName = projName, pred = as.integer(1000 * round(preds, 3)))
 }
+
 
 get.balanced.sample <- function(obs,samp){
   
@@ -451,17 +468,20 @@ make.SDM <- function(i){
   } else {
     scaled.variables <- NULL
   }
+ 
   for(ir in seq_along(regions)){
     iregion <- (climData[, "region"] == regions[ir])
     newData <- climData[iregion, c("LnP", "LnPScaled", "MinT", "MinTScaled")]
     #Project model onto region
-    bresM$Proj[[ir]]$Proj <- make_projection(bsdm=bresM$SDMs$m,
-                                             newData=newData,
-                                             projName=paste0(model, "_region", regions[ir]))		
+    bresM$Proj[[ir]]$Proj <- make_projection(bsdm = bresM$SDMs$m,
+                                             newData = newData,
+                                             projName = paste0(model, "_region", regions[ir]),
+                                             bopt = bopt)		
     
     #Prepare response curve plot predictions
     bresM$ResponseCurvePreds[[ir]] <- try(our.response.plot2(
       modelObj=bresM$SDMs$m, modelName=model,
+      bopt = bopt,
       Data=newData,
       orig.variables=orig.variables,
       scaled.variables=scaled.variables,
@@ -474,8 +494,18 @@ make.SDM <- function(i){
   
   
   #clean fitted model objects, i.e., it will NOT work with predict.glm resp. predict.gam
-warning("TODO(drs): fix this; it is now SDMs$m")
-  bresM$SDMs <- bresM$SDMs[c('coefficients','DEV','family','cutoff','edf')] #'model'
+  
+	bresM$SDMs$m <- if (inherits(bresM$SDMs$m, "glm")) {
+						bresM$SDMs$m[c('coefficients', 'family', 'df.null', 'df.residual')]
+					} else if (inherits(bresM$SDMs$m, "gam")) {
+						bresM$SDMs$m[c('coefficients', 'family', 'edf')]
+					} else if (inherits(bresM$SDMs$m, "maxent")) {
+						bresM$SDMs$m
+					} else if (inherits(bresM$SDMs$m, "randomForest")) {
+						bresM$SDMs$m
+					} else if (inherits(bresM$SDMs$m, "gbm")) {
+						bresM$SDMs$m
+					}
   
   
   return(bresM)

@@ -132,7 +132,7 @@ keepPart <- FALSE #if TRUE, keep all the evaluation numbers for each site as par
 ## Define set of biomod runs
 runRequests <- expand.grid(sdm.models, names(mlevels), types, errors,1:presenceRealizationsN, 1:biomod2.NbRunEval, stringsAsFactors=FALSE, KEEP.OUT.ATTRS=FALSE)
 colnames(runRequests) <- c("models", "mlevels", "types", "errors","realizations", "run")
-runRequestsIDs <- apply(runRequests, MARGIN=1, FUN=function(x) paste(trim(x), collapse="_"))
+runRequestsIDs <- apply(runRequests, MARGIN=1, FUN=function(x) paste(trimws(x), collapse="_"))
 
 if(do.ExampleForDropbox){
   if(file.exists(ftemp <- file.path(dir.dat, "runRequests_vExample.rds"))){
@@ -258,7 +258,7 @@ if(do.SDMs){
   list.export <- c("libraries", "climData", "obsData", "probData", "centerMeansData", 
                    "runRequests", "baseRegion", "regions", "mlevels", "sdm.models", 
                    "eval.methods", "predictorsN", "make.SDM", "set_Data", "calc_sdms", 
-                   "set_options", "make_projection","dir.sdm", "dir.in","equalSamples",
+                   "set_options", "make_prediction", "make_projection","dir.sdm", "dir.in","equalSamples",
                    "get.balanced.sample","get.cutoff", "our.response.plot2")
   if(identical(parallel_backend, "mpi")){
     exportObjects(list.export)
@@ -291,11 +291,12 @@ if(do.SDMs){
   bres <- bres[goodRuns]
   temp <- t(sapply(bres, FUN=function(l) l$runID))
   #runIDs = index for which row of runRequests corresponds to elements of bres
-  runIDs <- na.exclude(match(apply(temp, 1, paste, collapse="_"), table=apply(runRequests, MARGIN=1, FUN=function(x) paste(trim(x), collapse="_"))))
+  runIDs <- na.exclude(match(apply(temp, 1, paste, collapse="_"), table=apply(runRequests, MARGIN=1, FUN=function(x) paste(trimws(x), collapse="_"))))
   
   save(list = c("bres", "runIDs"), file=file.path(dir.dat, filename.saveSDMs))
   print(paste(Sys.time(), ": SDMs done"))
 }
+
 
 if(do.Partition){
   
@@ -419,23 +420,28 @@ if(do.Partition){
   
 }
 
+
 ##Get effective degrees of freedom
 edf <- rep(NA,length(bres))
 
-warning("TODO(drs): fix this; it is now SDMs$m")
+stop("TODO(drs): fix this: what are EDFs for RF, MaxEnt, and BRT?")
 for(ee in 1:length(edf)){
-  
-  if(runRequests[ee,"models"] == "GAM") edf[ee] <- sum(bres[[ee]]$SDMs$edf)
-  
-  if(runRequests[ee,"models"] == "GLM" & runRequests[ee,"mlevels"] == "woInt") edf[ee] <- 5
-  
-  if(runRequests[ee,"models"] == "GLM" & runRequests[ee,"mlevels"] == "wInt") edf[ee] <- 6
-  
+	edf[ee] <- if(runRequests[ee,"models"] == "GAM") {
+					sum(bres[[ee]]$SDMs$m$edf)
+				} else if(runRequests[ee,"models"] == "GLM") {
+					with(bresM$SDMs$m, df.null - df.residual + 1)
+				} else if (inherits(bresM$SDMs$m, "maxent")) {
+					NA
+				} else if (inherits(bresM$SDMs$m, "randomForest")) {
+					NA
+				} else if (inherits(bresM$SDMs$m, "gbm")) {
+					NA
+				}
 }
 
 png(paste(dir.out,"DF.png",sep="/"),width=6,height=4,units="in",res=600)
 par(mar=c(8,4,1,1))
-tmp <- boxplot(edf ~ apply(runRequests[,1:3],1,paste,collapse="_"),axes=FALSE,frame.plot=TRUE)
+tmp <- boxplot(edf ~ apply(runRequests[, colnames(runEvals)],1,paste,collapse="_"),axes=FALSE,frame.plot=TRUE)
 axis(2)
 axis(1,at = 1:length(tmp$names), labels = tmp$names,las=3,cex.axis=.85)
 mtext("Degrees of Freedom",side=2,line=2.5)

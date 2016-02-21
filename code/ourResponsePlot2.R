@@ -1,4 +1,4 @@
-our.response.plot2 <- function(modelObj, modelName, Data, orig.variables, scaled.variables=NULL, centerMeans, data_species, fixed.var.metric = 'mean'){
+our.response.plot2 <- function(modelObj, modelName, bopt, Data, orig.variables, scaled.variables=NULL, centerMeans, data_species, fixed.var.metric = 'mean'){
 ##biomod2::response.plot2:
 #	- doesn't find loaded models even though they were loaded properly
 #	--> our own version  loads the model instead of assuming that the models are loaded
@@ -66,7 +66,7 @@ our.response.plot2 <- function(modelObj, modelName, Data, orig.variables, scaled
 		if(!is.null(pts.tmp.orig)) Data.r.tmp[, iorig] <- pts.tmp.orig
 
 		# 2. make projections 
-		proj.tmp <- predict(object=modelObj, newdata=Data.r.tmp, type='response', se.fit=FALSE)
+		proj.tmp <- make_projection(bsdm = modelObj, newData = Data.r.tmp, bopt = bopt)$pred	
 
 		# 5. Storing results
 		if(length(list.out[[vari]]) == 0){ #init
