@@ -1,3 +1,13 @@
+###############################################################################
+#
+# Bell, D. M., and D. R. Schlaepfer. Impacts of the data-generating processes and species distribution model complexity on ecological fidelity and global change predictions.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+###############################################################################
+
 
 
 ##logit and inverse logit
@@ -276,7 +286,7 @@ get.cutoff <- function(pred, obs, pred.eval, obs.eval, method){
 }
 
 
-make_prediction <- function(bsdm, newData, bopt) {
+make_prediction <- function(bsdm, newData) {
 	if (inherits(bsdm, "glm") || inherits(bsdm, "gam")) {
 		preds <- predict(bsdm, newdata = newData, type = 'response', se.fit = FALSE)
 
@@ -287,7 +297,7 @@ make_prediction <- function(bsdm, newData, bopt) {
 		preds <- as.numeric(predict(bsdm, newdata = newData, type = "prob")[, "1"])
     
     } else if (inherits(bsdm, "gbm")) {
-    	preds <- predict(bsdm, newdata = newData, type = "response", n.trees = bopt$n.trees)
+    	preds <- predict(bsdm, newdata = newData, type = "response", n.trees = bsdm$n.trees)
 
 	} else {
 		preds <- NULL
@@ -317,7 +327,7 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
                         x = FALSE, y = FALSE)
     bsdms$DEV <- deviance(bsdms)
     
-  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1], bopt)
+  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1])
   	pred.obs <- fitted(bsdms$m)
   }
   
@@ -328,7 +338,7 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
                        control = bopt$control)
     bsdms$DEV <- deviance(bsdms)
     
-  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1], bopt)
+  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1])
   	pred.obs <- fitted(bsdms$m)
   }
   
@@ -346,8 +356,8 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
   	
     bsdms$DEV <- NA
     
-  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1], bopt)
-  	pred.obs <- make_prediction(bsdms$m, data.tmp[, -1], bopt)
+  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1])
+  	pred.obs <- make_prediction(bsdms$m, data.tmp[, -1])
   }
 
   if (model == "RF") {
@@ -363,8 +373,8 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
   	
   	bsdms$DEV <- NA
     
-  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1], bopt)
-  	pred.obs <- make_prediction(bsdms$m, data.tmp[, -1], bopt)
+  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1])
+  	pred.obs <- make_prediction(bsdms$m, data.tmp[, -1])
   }
 
   if (model == "BRT") {
@@ -381,8 +391,8 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
             			verbose = FALSE)
   	bsdms$DEV <- NA
     
-  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1], bopt)
-  	pred.obs <- make_prediction(bsdms$m, data.tmp[, -1], bopt)
+  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1])
+  	pred.obs <- make_prediction(bsdms$m, data.tmp[, -1])
   }
 
   
@@ -397,8 +407,8 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
 
 
 # Project the SDMs based on one region to the others
-make_projection <- function(bsdm, newData, projName = "", bopt){
-  preds <- make_prediction(bsdm, newData, bopt)
+make_projection <- function(bsdm, newData, projName = ""){
+  preds <- make_prediction(bsdm, newData)
   list(projName = projName, pred = as.integer(1000 * round(preds, 3)))
 }
 
@@ -425,90 +435,101 @@ get.balanced.sample <- function(obs,samp){
 
 #previously used biomod 2 and now involves direct modeling and evaluation
 make.SDM <- function(i){
-  type <- runRequests[i, "types"]
-  mlevel <- runRequests[i, "mlevels"]
-  model <- runRequests[i, "models"]
-  error <- runRequests[i, "errors"]
+	id <- paste0("SDM_", i, "_", paste(runRequests[i, ], collapse = "_"))
+	print(paste(Sys.time(), "make.SDM:", i, paste(runRequests[i, ], collapse = "-")))
+
+	ftemp <- file.path(dir.sdm, paste(runRequests[i, c("models", "types")], collapse = "_"), paste0(id, ".rds"))
+	if (file.exists(ftemp)) {
+		# load memoized data
+		bresM <- readRDS(ftemp)
+	} else {
+		type <- runRequests[i, "types"]
+		mlevel <- runRequests[i, "mlevels"]
+		model <- runRequests[i, "models"]
+		error <- runRequests[i, "errors"]
+
+		#we fixed: predictorsN == 10
+		DSplit <- 100 * (1 - 1/(1 + sqrt(predictorsN - 1))) #Fielding, A. H., and J. F. Bell. 1997. A review of methods for the assessment of prediction errors in conservation presence/absence models. Environmental Conservation 24:38-49.
+
+		#Get data
+		ibase <- (climData[, "region"] == baseRegion)
+		N <- sum(ibase)
+		samp <- sample(x=1:N, size=trunc(N*DSplit/100), replace=FALSE)
+
+		if(equalSamples)
+			samp <- get.balanced.sample(obsData[[paste(type,error,sep="_")]][ibase, runRequests[i, 'realizations']],samp)
+
+		bdat <- set_Data(type = type,
+					   error = error,
+					   obs = obsData[[paste(type,error,sep="_")]][ibase, runRequests[i, 'realizations']],
+					   dat = climData[ibase, ],
+					   samp = samp,
+					   run = runRequests[i, 'realizations'])
   
-  #we fixed: predictorsN == 10
-  DSplit <- 100 * (1 - 1/(1 + sqrt(predictorsN - 1))) #Fielding, A. H., and J. F. Bell. 1997. A review of methods for the assessment of prediction errors in conservation presence/absence models. Environmental Conservation 24:38-49.
-  
-  #Get data
-  ibase <- (climData[, "region"] == baseRegion)
-  N <- sum(ibase)
-  samp <- sample(x=1:N, size=trunc(N*DSplit/100), replace=FALSE)
-  
-  if(equalSamples)
-    samp <- get.balanced.sample(obsData[[paste(type,error,sep="_")]][ibase, runRequests[i, 'realizations']],samp)
-  
-  bdat <- set_Data(type = type,
-                   error = error,
-                   obs = obsData[[paste(type,error,sep="_")]][ibase, runRequests[i, 'realizations']],
-                   dat = climData[ibase, ],
-                   samp = samp,
-                   run = runRequests[i, 'realizations'])
-  
-  #Build models -- full data
-  bresM <- vector(mode="list", length=6)
-  names(bresM) <- c("runID", "centerMeans", "SDMs", "Proj", "samp", "ResponseCurvePreds")
-  bresM$runID <- runRequests[i, ]
-  bresM$centerMeans <- centerMeansData
-  bresM$samp <- samp
-  
-  bopt <- set_options(model = model, level=  mlevels[[mlevel]])
-  
-  bresM$SDMs <- calc_sdms(type = type, error = error, model = model, bdat = bdat, bopt = bopt, eval.methods = eval.methods) 
-  
-  #Project model onto all regions and for response curve plots
-  bresM$Proj <- bresM$ResponseCurvePreds <- vector(mode="list", length=length(regions))
-  orig.variables <- names(climData[,-(1:3)])
-  if(length(temp <- grep("Scaled", orig.variables)) > 0){
-    scaled.variables <- orig.variables[temp]
-    orig.variables <- orig.variables[-temp]
-  } else {
-    scaled.variables <- NULL
-  }
+		#Build models -- full data
+		bresM <- vector(mode="list", length=6)
+		names(bresM) <- c("runID", "centerMeans", "SDMs", "Proj", "samp", "ResponseCurvePreds")
+		bresM$runID <- runRequests[i, ]
+		bresM$centerMeans <- centerMeansData
+		bresM$samp <- samp
+
+		bopt <- set_options(model = model, level=  mlevels[[mlevel]])
+
+		bresM$SDMs <- calc_sdms(type = type, error = error, model = model, bdat = bdat, bopt = bopt, eval.methods = eval.methods) 
+
+		#Project model onto all regions and for response curve plots
+		bresM$Proj <- bresM$ResponseCurvePreds <- vector(mode="list", length=length(regions))
+		orig.variables <- names(climData[,-(1:3)])
+		if(length(temp <- grep("Scaled", orig.variables)) > 0){
+			scaled.variables <- orig.variables[temp]
+			orig.variables <- orig.variables[-temp]
+		} else {
+			scaled.variables <- NULL
+		}
  
-  for(ir in seq_along(regions)){
-    iregion <- (climData[, "region"] == regions[ir])
-    newData <- climData[iregion, c("LnP", "LnPScaled", "MinT", "MinTScaled")]
-    #Project model onto region
-    bresM$Proj[[ir]]$Proj <- make_projection(bsdm = bresM$SDMs$m,
-                                             newData = newData,
-                                             projName = paste0(model, "_region", regions[ir]),
-                                             bopt = bopt)		
-    
-    #Prepare response curve plot predictions
-    bresM$ResponseCurvePreds[[ir]] <- try(our.response.plot2(
-      modelObj=bresM$SDMs$m, modelName=model,
-      bopt = bopt,
-      Data=newData,
-      orig.variables=orig.variables,
-      scaled.variables=scaled.variables,
-      centerMeans=bresM$centerMeans,
-      data_species=obsData[[paste(type,error,sep="_")]][iregion, runRequests[i, 'realizations']],
-      fixed.var.metric="mean") #mean was proposed in the 'evaluation strip' by Elith et al. 2005
-      , silent=TRUE)
-  }
+		for(ir in seq_along(regions)){
+			iregion <- (climData[, "region"] == regions[ir])
+			newData <- climData[iregion, c("LnP", "LnPScaled", "MinT", "MinTScaled")]
+			#Project model onto region
+			bresM$Proj[[ir]]$Proj <- make_projection(bsdm = bresM$SDMs$m,
+													 newData = newData,
+													 projName = paste0(model, "_region", regions[ir]))		
+	
+		#Prepare response curve plot predictions
+		bresM$ResponseCurvePreds[[ir]] <- try(our.response.plot2(
+			modelObj=bresM$SDMs$m, modelName=model,
+			Data=newData,
+			orig.variables=orig.variables,
+			scaled.variables=scaled.variables,
+			centerMeans=bresM$centerMeans,
+			data_species=obsData[[paste(type,error,sep="_")]][iregion, runRequests[i, 'realizations']],
+			fixed.var.metric="mean") #mean was proposed in the 'evaluation strip' by Elith et al. 2005
+			, silent=TRUE)
+		}
   
   
   
-  #clean fitted model objects, i.e., it will NOT work with predict.glm resp. predict.gam
+		#clean fitted model objects, i.e., it will NOT work with predict.glm resp. predict.gam
   
-	bresM$SDMs$m <- if (inherits(bresM$SDMs$m, "glm")) {
-						bresM$SDMs$m[c('coefficients', 'family', 'df.null', 'df.residual')]
-					} else if (inherits(bresM$SDMs$m, "gam")) {
-						bresM$SDMs$m[c('coefficients', 'family', 'edf')]
-					} else if (inherits(bresM$SDMs$m, "maxent")) {
-						bresM$SDMs$m
-					} else if (inherits(bresM$SDMs$m, "randomForest")) {
-						bresM$SDMs$m
-					} else if (inherits(bresM$SDMs$m, "gbm")) {
-						bresM$SDMs$m
-					}
+		bresM$SDMs$m <- if (inherits(bresM$SDMs$m, "glm")) {
+							bresM$SDMs$m$family <- bresM$SDMs$m$family[c("family", "link")]
+							bresM$SDMs$m[c('coefficients', 'family', 'df.null', 'df.residual')]
+						} else if (inherits(bresM$SDMs$m, "gam")) {
+							bresM$SDMs$m$family <- bresM$SDMs$m$family[c("family", "link")]
+							bresM$SDMs$m[c('coefficients', 'family', 'edf')]
+						} else if (inherits(bresM$SDMs$m, "maxent")) {
+							bresM$SDMs$m
+						} else if (inherits(bresM$SDMs$m, "randomForest")) {
+							bresM$SDMs$m[c("type", "importance", "ntree", "mtry", "confusion")]
+						} else if (inherits(bresM$SDMs$m, "gbm")) {
+							bresM$SDMs$m[c("initF", "n.trees", "distribution", "interaction.depth")]
+						}
+		
+		# Memoize the results
+		saveRDS(bresM, ftemp)
+	}  
   
-  
-  return(bresM)
+	i
 }
 
 
@@ -518,87 +539,111 @@ mae <- function(obs, pred, na.rm=FALSE) mean(abs(obs - pred), na.rm=na.rm)
 
 
 eval2.SDMs <- function(i, runEval, type, error, mlevel, model, runID, bsub){
-  if(length(bsub) == 0) return(NULL)
-  ids <- matrix(unlist(t(sapply(bsub, FUN=function(l) l$runID))[, c("realizations", "run")]), ncol=2, byrow=FALSE, dimnames=list(NULL, c("realizations", "run")))
+	id <- paste0("Eval_", i, "_", paste(runEval[i, ], collapse = "_"))
+	print(paste(Sys.time(), "eval2.SDMs:", i, paste(runEval[i, ], collapse = "-")))
+
+	ftemp <- file.path(dir.sdm, paste(runRequests[i, c("models", "types")], collapse = "_"), paste0(id, ".rds"))
+	if (file.exists(ftemp)) {
+		# load memoized data
+		bevalM <- readRDS(ftemp)
+	} else {
+		if (length(bsub) == 0) {
+			bevalM <- NULL
+		} else {
+			ids <- matrix(unlist(t(sapply(bsub, FUN=function(l) l$runID))[, c("realizations", "run")]), ncol=2, byrow=FALSE, dimnames=list(NULL, c("realizations", "run")))
+
+			quantile.probs <- c(0.025, 0.05, 0.25, 0.5, 0.75, 0.95, 0.975)
+
+			#Prepare result container
+			bevalM <- vector(mode="list", length=4)
+			names(bevalM) <- c("evalID", "Eval", "Deviance", "Proj") #removed variable importance for now
+			bevalM$evalID <- runEval
+
+			#Evaluate models based on evaluation datasplits and realizations
+			stat.methods <- c('Testing.data','Evaluating.data','Cutoff','Sensitivity','Specificity')
+			temp.Eval <- array(NA,dim=c(length(eval.methods), length(stat.methods), temp <- apply(ids, 2, max)),
+							 dimnames=list(eval.methods, stat.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
+			temp.Dev <- array(NA, dim=temp)
+
+			warning("TODO(drs): get deviance(-replacement) for new methods")
+			for(j in 1:nrow(ids)){
+				temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- bsub[[j]]$SDMs$cutoff[,stat.methods]
+				temp.Dev[ids[j, "realizations"], ids[j, "run"]] <- bsub[[j]]$SDMs$DEV
+			}
+
+			bevalM$Eval$mean <- apply(temp.Eval, MARGIN=c(1,2), FUN=mean, na.rm=TRUE)
+			bevalM$Eval$sd   <- apply(temp.Eval, MARGIN=c(1,2), FUN=sd, na.rm=TRUE)
+			bevalM$Eval$quantiles   <- apply(temp.Eval, MARGIN=c(1,2),FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
+			bevalM$Deviance <- c(mean=mean(temp.Dev, na.rm=TRUE), sd=sd(temp.Dev, na.rm=TRUE))
+			bevalM$Deviance$quantiles <- quantile(temp.Dev, probs=quantile.probs, type=8, na.rm=TRUE)
+
+			#Project models onto all regions and take differences between projected and base region
+			bevalM$Proj <- vector(mode="list", length=length(regions))
+			stat.methods <- c("Testing.data", "Cutoff", "Sensitivity", "Specificity")
+
+warning("TODO(drs): add code to measure degree of extrapolation")
+if (FALSE) {
+	# based on ExDet by Mesgaran, M.B., Cousens, R.D. & Webber, B.L. (2014) Here be dragons: a tool for quantifying novelty due to covariate range and correlation change when projecting species distribution models. Diversity & Distributions, 20: 1147–1159, DOI: 10.1111/ddi.12209
+	# but their tool is standalone, instead use modified code from https://pvanb.wordpress.com/2014/05/13/a-new-method-and-tool-exdet-to-evaluate-novelty-environmental-conditions/
+	# calculate NT2:
+
+}
+	
+			for(ir in c(baseRegion, seq_along(regions)[-baseRegion])){
+				temp.Eval <- array(NA,dim=c(length(eval.methods), length(stat.methods), temp <- apply(ids, 2, max)),
+								   dimnames=list(eval.methods, stat.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
+				temp.Prob <- array(NA,dim=c(2, temp),
+								   dimnames=list(c('rmse','mae'), eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
+
+				#Evaluate projections based on complete dataset
+				data.probs <- probData[[paste(type,error,sep="_")]][(climData[, "region"] == regions[ir])]
+
+				for(j in 1:nrow(ids)){
+				  data.obs <- obsData[[paste(type,error,sep="_")]][(climData[, "region"] == regions[ir]), ids[j, "realizations"]]
+				  FittedData <- bsub[[j]]$Proj[[ir]]$Proj$pred/1000
+				  temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- 
+					get.cutoff(pred = FittedData,
+							   obs = data.obs,
+							   pred.eval = FittedData,
+							   obs.eval = data.obs,
+							   method = eval.methods)[,stat.methods]
   
-  quantile.probs <- c(0.025, 0.05, 0.25, 0.5, 0.75, 0.95, 0.975)
+				  temp.Prob['rmse', ids[j, "realizations"], ids[j, "run"]] <- rmse(obs=data.probs, pred = FittedData)
+				  temp.Prob['mae', ids[j, "realizations"], ids[j, "run"]]  <- mae(obs=data.probs, pred = FittedData)
   
-  #Prepare result container
-  bevalM <- vector(mode="list", length=4)
-  names(bevalM) <- c("evalID", "Eval", "Deviance", "Proj") #removed variable importance for now
-  bevalM$evalID <- runEval
-  
-  #Evaluate models based on evaluation datasplits and realizations
-  stat.methods <- c('Testing.data','Evaluating.data','Cutoff','Sensitivity','Specificity')
-  temp.Eval <- array(NA,dim=c(length(eval.methods), length(stat.methods), temp <- apply(ids, 2, max)),
-                     dimnames=list(eval.methods, stat.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
-  temp.Dev <- array(NA, dim=temp)
-  
-  for(j in 1:nrow(ids)){
-    temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- bsub[[j]]$SDMs$cutoff[,stat.methods]
-    temp.Dev[ids[j, "realizations"], ids[j, "run"]] <- bsub[[j]]$SDMs$DEV
-  }
-  
-  bevalM$Eval$mean <- apply(temp.Eval, MARGIN=c(1,2), FUN=mean, na.rm=TRUE)
-  bevalM$Eval$sd   <- apply(temp.Eval, MARGIN=c(1,2), FUN=sd, na.rm=TRUE)
-  bevalM$Eval$quantiles   <- apply(temp.Eval, MARGIN=c(1,2),FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
-  bevalM$Deviance <- c(mean=mean(temp.Dev, na.rm=TRUE), sd=sd(temp.Dev, na.rm=TRUE))
-  bevalM$Deviance$quantiles   <- quantile(temp.Dev, probs=quantile.probs, type=8, na.rm=TRUE)
-  
-  #Project models onto all regions and take differences between projected and base region
-  bevalM$Proj <- vector(mode="list", length=length(regions))
-  stat.methods <- c("Testing.data", "Cutoff", "Sensitivity", "Specificity")
-  
-  for(ir in c(baseRegion, seq_along(regions)[-baseRegion])){
-    temp.Eval <- array(NA,dim=c(length(eval.methods), length(stat.methods), temp <- apply(ids, 2, max)),
-                       dimnames=list(eval.methods, stat.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
-    temp.Prob <- array(NA,dim=c(2, temp),
-                       dimnames=list(c('rmse','mae'), eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
-    
-    #Evaluate projections based on complete dataset
-    data.probs <- probData[[paste(type,error,sep="_")]][(climData[, "region"] == regions[ir])]
-    
-    for(j in 1:nrow(ids)){
-      data.obs <- obsData[[paste(type,error,sep="_")]][(climData[, "region"] == regions[ir]), ids[j, "realizations"]]
-      FittedData <- bsub[[j]]$Proj[[ir]]$Proj$pred/1000
-      temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- 
-        get.cutoff(pred = FittedData,
-                   obs = data.obs,
-                   pred.eval = FittedData,
-                   obs.eval = data.obs,
-                   method = eval.methods)[,stat.methods]
-      
-      temp.Prob['rmse', ids[j, "realizations"], ids[j, "run"]] <- rmse(obs=data.probs, pred = FittedData)
-      temp.Prob['mae', ids[j, "realizations"], ids[j, "run"]]  <- mae(obs=data.probs, pred = FittedData)
-      
-    }
-    
-    #Differences to base region
-    if(ir == baseRegion){#Code assumes that ir takes as first value the value of base region
-      base.Eval <- temp.Eval
-      base.Prob <- temp.Prob
-    }
-    diff.Eval <- temp.Eval - base.Eval
-    diff.Prob <- temp.Prob - base.Prob
-    
-    #Aggregated evaluations
-    bevalM$Proj[[ir]]$Eval$mean <- apply(temp.Eval, MARGIN=c(1, 2), FUN=mean, na.rm=TRUE)
-    bevalM$Proj[[ir]]$Eval$sd   <- apply(temp.Eval, MARGIN=c(1, 2), FUN=sd, na.rm=TRUE)
-    bevalM$Proj[[ir]]$Eval$quantiles <- apply(temp.Eval, MARGIN=c(1, 2), FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
-    bevalM$Proj[[ir]]$EvalDiffToBase$mean <- apply(diff.Eval, MARGIN=c(1, 2), FUN=mean, na.rm=TRUE)
-    bevalM$Proj[[ir]]$EvalDiffToBase$sd   <- apply(diff.Eval, MARGIN=c(1, 2), FUN=sd, na.rm=TRUE)
-    bevalM$Proj[[ir]]$EvalDiffToBase$quantiles <- apply(diff.Eval, MARGIN=c(1, 2), FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
-    
-    #Evaluate projections against underlying probabilities
-    bevalM$Proj[[ir]]$EvalProb$mean <- apply(temp.Prob, MARGIN=1, FUN=mean, na.rm=TRUE)
-    bevalM$Proj[[ir]]$EvalProb$sd <- apply(temp.Prob, MARGIN=1, FUN=sd, na.rm=TRUE)
-    bevalM$Proj[[ir]]$EvalProb$quantiles <- apply(temp.Prob, MARGIN=1, FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
-    bevalM$Proj[[ir]]$EvalProbDiffToBase$mean <- apply(diff.Prob, MARGIN=1, FUN=mean, na.rm=TRUE)
-    bevalM$Proj[[ir]]$EvalProbDiffToBase$sd <- apply(diff.Prob, MARGIN=1, FUN=sd, na.rm=TRUE)
-    bevalM$Proj[[ir]]$EvalProbDiffToBase$quantiles <- apply(diff.Prob, MARGIN=1, FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
-  }
-  
-  return(bevalM)
+				}
+
+				#Differences to base region
+				if(ir == baseRegion){#Code assumes that ir takes as first value the value of base region
+				  base.Eval <- temp.Eval
+				  base.Prob <- temp.Prob
+				}
+				diff.Eval <- temp.Eval - base.Eval
+				diff.Prob <- temp.Prob - base.Prob
+
+				#Aggregated evaluations
+				bevalM$Proj[[ir]]$Eval$mean <- apply(temp.Eval, MARGIN=c(1, 2), FUN=mean, na.rm=TRUE)
+				bevalM$Proj[[ir]]$Eval$sd   <- apply(temp.Eval, MARGIN=c(1, 2), FUN=sd, na.rm=TRUE)
+				bevalM$Proj[[ir]]$Eval$quantiles <- apply(temp.Eval, MARGIN=c(1, 2), FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
+				bevalM$Proj[[ir]]$EvalDiffToBase$mean <- apply(diff.Eval, MARGIN=c(1, 2), FUN=mean, na.rm=TRUE)
+				bevalM$Proj[[ir]]$EvalDiffToBase$sd   <- apply(diff.Eval, MARGIN=c(1, 2), FUN=sd, na.rm=TRUE)
+				bevalM$Proj[[ir]]$EvalDiffToBase$quantiles <- apply(diff.Eval, MARGIN=c(1, 2), FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
+
+				#Evaluate projections against underlying probabilities
+				bevalM$Proj[[ir]]$EvalProb$mean <- apply(temp.Prob, MARGIN=1, FUN=mean, na.rm=TRUE)
+				bevalM$Proj[[ir]]$EvalProb$sd <- apply(temp.Prob, MARGIN=1, FUN=sd, na.rm=TRUE)
+				bevalM$Proj[[ir]]$EvalProb$quantiles <- apply(temp.Prob, MARGIN=1, FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
+				bevalM$Proj[[ir]]$EvalProbDiffToBase$mean <- apply(diff.Prob, MARGIN=1, FUN=mean, na.rm=TRUE)
+				bevalM$Proj[[ir]]$EvalProbDiffToBase$sd <- apply(diff.Prob, MARGIN=1, FUN=sd, na.rm=TRUE)
+				bevalM$Proj[[ir]]$EvalProbDiffToBase$quantiles <- apply(diff.Prob, MARGIN=1, FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
+			}
+		
+		}
+		
+		writeRDS(bevalM, file = ftemp)
+	}
+  	
+	i
 }
 
 
@@ -635,6 +680,90 @@ map_distributions <- function(Obs, Fit, XY, model, fun = mean, maxPred = 1000, f
     dev.off()
   }
 }
+
+our.response.plot2 <- function(modelObj, modelName, Data, orig.variables, scaled.variables=NULL, centerMeans, data_species, fixed.var.metric = 'mean'){
+##biomod2::response.plot2:
+#	- doesn't find loaded models even though they were loaded properly
+#	--> our own version  loads the model instead of assuming that the models are loaded
+#	- doesn't account for 'coupled' variables like MAT and MATScaled
+#	--> our own version co-varies 'coupled' variables properly
+##deleted arguments: do.bivariate = FALSE, save.file="no", name="response_curve", ImageSize=480, plot=FALSE
+
+	# 1. args checking -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= #
+	if(is.null(scaled.variables)){
+		show.variables <- orig.variables
+		isScaled <- FALSE
+	} else {
+		show.variables <- scaled.variables
+		isScaled <- TRUE
+	}
+
+	nb.pts <- 100
+	if(is.null(data_species)){
+		data_species <- rep(1,nrow(Data))
+	} else {
+		data_species[data_species!=1 | is.na(data_species)] <- 0
+	}
+
+
+	# 2. build function outputs
+	factor_id <- which(sapply(Data,is.factor))
+	list.out <- list()
+
+	# Create a ranged data table
+	ref_table <- Data[1,,drop=F]
+	rownames(ref_table) <- NULL
+
+	for(i in 1:ncol(Data)){
+		temp <- Data[data_species==1,i]
+		if(is.numeric(Data[,i])){
+			ref_table[,i] <- switch(fixed.var.metric,
+								  mean = mean(temp),
+								  median = median(temp),
+								  min = min(temp),
+								  max = max(temp))
+		} else{
+			# return the majoritary class
+			sum_level <- summary(temp)
+			ref_table[,i] <- names(sum_level)[sum_level==max(sum_level)]
+		}
+	}
+
+	for(vari in show.variables){
+		# creating Tmp data
+		if(is.factor(Data[,vari])){
+			pts.tmp <- as.factor(levels(Data[,vari]))
+		} else {
+			pts.tmp <- seq(min(Data[,vari]), max(Data[,vari]), length.out=nb.pts)
+			temp <- grep(iorig <- sub("Scaled", "", vari), names(centerMeans))
+			pts.tmp.orig <- if(isScaled) pts.tmp + centerMeans[temp] else NULL
+		}
+
+		Data.r.tmp <- eval(parse(text=paste("cbind(",vari,"=pts.tmp,ref_table[,-which(colnames(ref_table)==vari),drop=F])",sep="")))
+		Data.r.tmp <- Data.r.tmp[,colnames(ref_table),drop=F]
+		if(length(factor_id)){
+			for(f in factor_id){
+				Data.r.tmp[,f] <- factor(as.character(Data.r.tmp[,f]), levels=levels(Data[,f]))
+			}
+		}
+		if(!is.null(pts.tmp.orig)) Data.r.tmp[, iorig] <- pts.tmp.orig
+
+		# 2. make projections 
+		proj.tmp <- make_projection(bsdm = modelObj, newData = Data.r.tmp)$pred	
+
+		# 5. Storing results
+		if(length(list.out[[vari]]) == 0){ #init
+			eval(parse(text=paste("list.out[['",vari,"']] <- data.frame(",vari,"=pts.tmp, ",modelName,"=proj.tmp)",sep="")))
+		} else {
+			eval(parse(text=paste("list.out[['",vari,"']] <- cbind(list.out[['",vari,"']],",modelName,"=proj.tmp)",sep="")))
+		}
+
+	}
+
+	invisible(list.out)
+
+}
+
 
 plot_scatterPredvsTrueProbs <- function(Prob, Fit, model, maxPred = 1000, figname){
   Fit <- Fit / maxPred
