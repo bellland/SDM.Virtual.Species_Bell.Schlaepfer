@@ -287,7 +287,7 @@ make_prediction <- function(bsdm, newData, bopt) {
 		preds <- as.numeric(predict(bsdm, newdata = newData, type = "prob")[, "1"])
     
     } else if (inherits(bsdm, "gbm")) {
-    	preds <- predict(bsdms$m, newdata = newData, type = "response", n.trees = bopt$n.trees)
+    	preds <- predict(bsdm, newdata = newData, type = "response", n.trees = bopt$n.trees)
 
 	} else {
 		preds <- NULL
