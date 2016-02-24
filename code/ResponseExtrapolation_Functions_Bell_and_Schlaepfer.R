@@ -32,6 +32,13 @@ rmat  <- function(n, rho = 0.9) {
   ((1 - rho^2)^-1)*mat
 }
 
+
+get_temp_fname <- function(x, base) {
+	file.path(dir.sdm, paste(x[c("models", "types")], collapse = "_"), paste0(base, ".rds"))
+} 
+
+
+
 ## Functions to read specimen data
 calc_ObservationsFromProbabilities <- function(probs, N, VAR, sigma,w){###need to incorporate long and Lat
   obs <- NULL
@@ -143,8 +150,8 @@ set_options <- function(model, level=c("linear", "squared", "interaction")){
   if ("MaxEnt" %in% model) { # This is the Tsuruoka and not the Phillips implementation of MaxEnt!
 	term <- NULL
 	if (any(level == "linear")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "LnP + MinT")
-#    if (any(level == "squared")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(LnPScaled * LnPScaled) + I(MinTScaled * MinTScaled)")
-#    if (any(level == "interaction")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(MinTScaled * LnPScaled)")
+    if (any(level == "squared")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(LnPScaled * LnPScaled) + I(MinTScaled * MinTScaled)")
+    if (any(level == "interaction")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(MinTScaled * LnPScaled)")
     formMET <- formula(paste0("eval(parse(text=type)) ~ ", term))
 
  	# http://www.nactem.ac.uk/tsuruoka/maxent/
@@ -158,7 +165,7 @@ set_options <- function(model, level=c("linear", "squared", "interaction")){
 	#[5] Yoshimasa Tsuruoka, Jun'ichi Tsujii, and Sophia Ananiadou. 2009. Stochastic Gradient Descent Training for L1-regularized Log-linear Models with Cumulative Penalty, In Proceedings of ACL-IJCNLP, pp. 477-485
 	
 	#Yoshimasa Tsuruoka recommends using one of following three methods if you see overfitting.
-	#1. Set the l1_regularizer parameter to 1.0, leaving l2_regularizer and set_heldout as default.
+	#1. Set the l1_regularizer (lasso) parameter to 1.0, leaving l2_regularizer (ridge) and set_heldout as default.
 	#2. Set the l2_regularizer parameter to 1.0, leaving l1_regularizer and set_heldout as default.
 	#3. Set the set_heldout parameter to hold-out a portion of your data, leaving l1_regularizer and l2_regularizer as default.
 	#If you are using a large number of training samples, try setting the use_sgd parameter to TRUE.
@@ -180,8 +187,8 @@ set_options <- function(model, level=c("linear", "squared", "interaction")){
 	# Breiman, L (2002), “Manual On Setting Up, Using, And Understanding Random Forests V3.1”, https://www.stat.berkeley.edu/~breiman/Using_random_forests_V3.1.pdf
 	# Cutler, D. R., T. C. Edwards, K. H. Beard, A. Cutler, K. T. Hess, J. Gibson, and J. J. Lawler. 2007. Random forests for classification in ecology. Ecology 88:2783-2792.
 	bopt <- list(myFormula = formRF,
-                      ntree = 501, # Number of trees to grow. This should not be set to too small a number, to ensure that every input row gets predicted at least a few times.; Cutler et al. 2007: even ntree = 50 produced quite stable results; odd number so that there will be no ties in predictions (which would be broken at random)
-                      mtry = 'default', # 'default' for classification (sqrt(p) where p is number of variables in x); Cutler et al. 2007: RF is insensitive to mtry
+                      ntree = 1001, # Number of trees to grow. This should not be set to too small a number, to ensure that every input row gets predicted at least a few times.; Cutler et al. 2007: even ntree = 50 produced quite stable results; odd number so that there will be no ties in predictions (which would be broken at random)
+                      mtry = if (any(level == "interaction")) 2 else 1, # 'default' for classification (sqrt(p) where p is number of variables in x); Cutler et al. 2007: RF is insensitive to mtry
                       nodesize = 5, #NOTE: randomForest's default for classification is 1 (which Breiman 2002 recommends); biomod2 sets it to 5. Minimum size of terminal nodes. Setting this number larger causes smaller trees to be grown (and thus take less time). Note that the default values are different for classification (1) and regression (5).
                       maxnodes = NULL)
   }
@@ -308,7 +315,7 @@ make_prediction <- function(bsdm, newData) {
 
 
 #fit model, get cutoff, and evaluation statistics
-calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
+calc_sdms <- function(type, error, model, bdat, bopt, eval.methods){
   type <<- type	 #Need to pass 'type' because of model formulae
   error <<- error
   data.tmp <- cbind(bdat$resp.var,bdat$expl.var)
@@ -319,12 +326,14 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
   bsdms <- list()
   
   if(model == 'GLM'){
-    bsdms$m <- stats::glm(formula = bopt$myFormula,
-                        family = bopt$family,
-                        data = data.tmp,
-                        #mustart = rep(bopt$mustart,nrow(data.tmp)),
-                        control = bopt$control,
-                        x = FALSE, y = FALSE)
+    bsdms$comp_time <- system.time(
+		temp <- stats::glm(formula = bopt$myFormula,
+							family = bopt$family,
+							data = data.tmp,
+							#mustart = rep(bopt$mustart,nrow(data.tmp)),
+							control = bopt$control,
+							x = FALSE, y = FALSE))["elapsed"]
+    bsdms$m <- temp
     bsdms$DEV <- deviance(bsdms)
     
   	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1])
@@ -332,10 +341,12 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
   }
   
   if(model == 'GAM'){
-    bsdms$m <- mgcv::gam(formula = bopt$myFormula,
+    bsdms$comp_time <- system.time(
+		temp <- mgcv::gam(formula = bopt$myFormula,
                        family = bopt$family,
                        data = data.tmp,
-                       control = bopt$control)
+                       control = bopt$control))["elapsed"]
+    bsdms$m <- temp
     bsdms$DEV <- deviance(bsdms)
     
   	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1])
@@ -344,41 +355,53 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
   
   if (model == "MaxEnt") {
   	# http://www.nactem.ac.uk/tsuruoka/maxent/
-  	warning("This is the Tsuruoka and not the Phillips implementation of MaxEnt!")
+#  	warning("This is the Tsuruoka and not the Phillips implementation of MaxEnt!")
   	
-  	bsdms$m <- maxent::maxent(feature_matrix = data.tmp[, -1],
+#  	if (any(grepl("I(MinTScaled * LnPScaled)", as.character(attr(terms(bopt$myFormula), "variables")), fixed = TRUE))) {
+#  		# with interaction
+#  		feature_matrix <- with(data.tmp, data.frame(LnP = LnP, MinT = MinT, LnP_x_MinT = MinTScaled * LnPScaled))
+#  	} else { #no interaction
+#  		feature_matrix <- with(data.tmp, data.frame(LnP = LnP, MinT = MinT))
+#  	}
+  	
+    bsdms$comp_time <- system.time(
+		temp <- maxent::maxent(feature_matrix = data.tmp[, c("LnP", "MinT")],
 							code_vector = as.factor(data.tmp[, 1]),
 							l1_regularizer = bopt$l1_regularizer,
 							l2_regularizer = bopt$l2_regularizer,
 							use_sgd = bopt$use_sgd,
 							set_heldout = bopt$set_heldout,
-							verbose = FALSE)
-  	
+							verbose = FALSE))["elapsed"]
+  	bsdms$m <- temp
     bsdms$DEV <- NA
     
-  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1])
-  	pred.obs <- make_prediction(bsdms$m, data.tmp[, -1])
+  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, c("LnP", "MinT")])
+  	pred.obs <- make_prediction(bsdms$m, data.tmp[, c("LnP", "MinT")])
   }
 
   if (model == "RF") {
-  	bsdms$m <- randomForest::randomForest(x = data.tmp[, -1], y = as.factor(data.tmp[, 1]), #classification random.forest: y must be a factor
+    bsdms$comp_time <- system.time(
+		temp <- randomForest::randomForest(x = data.tmp[, c("LnP", "MinT")], y = as.factor(data.tmp[, 1]), #classification random.forest: y must be a factor
 # 										formula = bopt$myFormula, #For large data sets, especially those with large number of variables, calling randomForest via the formula interface is not advised: There may be too much overhead in handling the formula.
 #  										data = data.tmp,
   										ntree = bopt$ntree,
+  										mtry = bopt$mtry,
   										importance = FALSE,
   										norm.votes = TRUE,
 #										strata = factor(c(0, 1)), # NOTE: biomod2 sets this, but it has no influence on result
   										nodesize = bopt$nodesize,
-  										maxnodes = bopt$maxnodes)
+  										maxnodes = bopt$maxnodes))["elapsed"]
   	
+  	bsdms$m <- temp
   	bsdms$DEV <- NA
     
-  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1])
-  	pred.obs <- make_prediction(bsdms$m, data.tmp[, -1])
+  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, c("LnP", "MinT")])
+  	pred.obs <- make_prediction(bsdms$m, data.tmp[, c("LnP", "MinT")])
   }
 
   if (model == "BRT") {
-	bsdms$m <- gbm::gbm(formula = bopt$myFormula,
+    bsdms$comp_time <- system.time(
+		temp <- gbm::gbm(formula = bopt$myFormula,
   						distribution = "bernoulli",
   						data = data.tmp,
             			n.trees = bopt$n.trees, 
@@ -388,7 +411,8 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
             			shrinkage = bopt$shrinkage, 
             			bag.fraction = bopt$bag.fraction,
             			train.fraction = bopt$train.fraction, 
-            			verbose = FALSE)
+            			verbose = FALSE))["elapsed"]
+  	bsdms$m <- temp
   	bsdms$DEV <- NA
     
   	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1])
@@ -402,7 +426,7 @@ calc_sdms <- function(type, error, model, bdat, bopt,eval.methods){
                              method = eval.methods)	
   
   ##return list
-  return(bsdms)
+  bsdms
 }
 
 
@@ -435,14 +459,10 @@ get.balanced.sample <- function(obs,samp){
 
 #previously used biomod 2 and now involves direct modeling and evaluation
 make.SDM <- function(i){
-	id <- paste0("SDM_", i, "_", paste(runRequests[i, ], collapse = "_"))
-	print(paste(Sys.time(), "make.SDM:", i, paste(runRequests[i, ], collapse = "-")))
+	ftemp <- get_temp_fname(runRequests[i, ], runRequestIDs[i])
+	if (!file.exists(ftemp)) {
+		print(paste(Sys.time(), "make.SDM:", i, paste(runRequests[i, ], collapse = "-")))
 
-	ftemp <- file.path(dir.sdm, paste(runRequests[i, c("models", "types")], collapse = "_"), paste0(id, ".rds"))
-	if (file.exists(ftemp)) {
-		# load memoized data
-		bresM <- readRDS(ftemp)
-	} else {
 		type <- runRequests[i, "types"]
 		mlevel <- runRequests[i, "mlevels"]
 		model <- runRequests[i, "models"]
@@ -510,7 +530,6 @@ make.SDM <- function(i){
   
   
 		#clean fitted model objects, i.e., it will NOT work with predict.glm resp. predict.gam
-  
 		bresM$SDMs$m <- if (inherits(bresM$SDMs$m, "glm")) {
 							bresM$SDMs$m$family <- bresM$SDMs$m$family[c("family", "link")]
 							bresM$SDMs$m[c('coefficients', 'family', 'df.null', 'df.residual')]
@@ -539,106 +558,100 @@ mae <- function(obs, pred, na.rm=FALSE) mean(abs(obs - pred), na.rm=na.rm)
 
 
 eval2.SDMs <- function(i, runEval, type, error, mlevel, model, runID, bsub){
-	id <- paste0("Eval_", i, "_", paste(runEval[i, ], collapse = "_"))
-	print(paste(Sys.time(), "eval2.SDMs:", i, paste(runEval[i, ], collapse = "-")))
+	ftemp <- get_temp_fname(runEvals[i, ], runEvalIDs[i])
+	if (!file.exists(ftemp)) {
+		if (length(bsub) == 0) stop("bsub does not contain data")
+		
+		print(paste(Sys.time(), "eval2.SDMs:", i, paste(runEval[i, ], collapse = "-")))
 
-	ftemp <- file.path(dir.sdm, paste(runRequests[i, c("models", "types")], collapse = "_"), paste0(id, ".rds"))
-	if (file.exists(ftemp)) {
-		# load memoized data
-		bevalM <- readRDS(ftemp)
-	} else {
-		if (length(bsub) == 0) {
-			bevalM <- NULL
-		} else {
-			ids <- matrix(unlist(t(sapply(bsub, FUN=function(l) l$runID))[, c("realizations", "run")]), ncol=2, byrow=FALSE, dimnames=list(NULL, c("realizations", "run")))
+		ids <- matrix(unlist(t(sapply(bsub, FUN=function(l) l$runID))[, c("realizations", "run")]), ncol=2, byrow=FALSE, dimnames=list(NULL, c("realizations", "run")))
 
-			quantile.probs <- c(0.025, 0.05, 0.25, 0.5, 0.75, 0.95, 0.975)
+		quantile.probs <- c(0.025, 0.05, 0.25, 0.5, 0.75, 0.95, 0.975)
 
-			#Prepare result container
-			bevalM <- vector(mode="list", length=4)
-			names(bevalM) <- c("evalID", "Eval", "Deviance", "Proj") #removed variable importance for now
-			bevalM$evalID <- runEval
+		#Prepare result container
+		bevalM <- vector(mode="list", length=4)
+		names(bevalM) <- c("evalID", "Eval", "Deviance", "Proj") #removed variable importance for now
+		bevalM$evalID <- runEval
 
-			#Evaluate models based on evaluation datasplits and realizations
-			stat.methods <- c('Testing.data','Evaluating.data','Cutoff','Sensitivity','Specificity')
-			temp.Eval <- array(NA,dim=c(length(eval.methods), length(stat.methods), temp <- apply(ids, 2, max)),
-							 dimnames=list(eval.methods, stat.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
-			temp.Dev <- array(NA, dim=temp)
+		#Evaluate models based on evaluation datasplits and realizations
+		stat.methods <- c('Testing.data','Evaluating.data','Cutoff','Sensitivity','Specificity')
+		temp.Eval <- array(NA,dim=c(length(eval.methods), length(stat.methods), temp <- apply(ids, 2, max)),
+						 dimnames=list(eval.methods, stat.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
+		temp.Dev <- array(NA, dim=temp)
 
-			warning("TODO(drs): get deviance(-replacement) for new methods")
-			for(j in 1:nrow(ids)){
-				temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- bsub[[j]]$SDMs$cutoff[,stat.methods]
-				temp.Dev[ids[j, "realizations"], ids[j, "run"]] <- bsub[[j]]$SDMs$DEV
-			}
+		warning("TODO(drs): get deviance(-replacement) for new methods")
+		for(j in 1:nrow(ids)){
+			temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- bsub[[j]]$SDMs$cutoff[,stat.methods]
+			temp.Dev[ids[j, "realizations"], ids[j, "run"]] <- bsub[[j]]$SDMs$DEV
+		}
 
-			bevalM$Eval$mean <- apply(temp.Eval, MARGIN=c(1,2), FUN=mean, na.rm=TRUE)
-			bevalM$Eval$sd   <- apply(temp.Eval, MARGIN=c(1,2), FUN=sd, na.rm=TRUE)
-			bevalM$Eval$quantiles   <- apply(temp.Eval, MARGIN=c(1,2),FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
-			bevalM$Deviance <- c(mean=mean(temp.Dev, na.rm=TRUE), sd=sd(temp.Dev, na.rm=TRUE))
-			bevalM$Deviance$quantiles <- quantile(temp.Dev, probs=quantile.probs, type=8, na.rm=TRUE)
+		bevalM$Eval$mean <- apply(temp.Eval, MARGIN=c(1,2), FUN=mean, na.rm=TRUE)
+		bevalM$Eval$sd   <- apply(temp.Eval, MARGIN=c(1,2), FUN=sd, na.rm=TRUE)
+		bevalM$Eval$quantiles   <- apply(temp.Eval, MARGIN=c(1,2),FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
+		bevalM$Deviance <- c(mean=mean(temp.Dev, na.rm=TRUE), sd=sd(temp.Dev, na.rm=TRUE))
+		bevalM$Deviance$quantiles <- quantile(temp.Dev, probs=quantile.probs, type=8, na.rm=TRUE)
 
-			#Project models onto all regions and take differences between projected and base region
-			bevalM$Proj <- vector(mode="list", length=length(regions))
-			stat.methods <- c("Testing.data", "Cutoff", "Sensitivity", "Specificity")
+		#Project models onto all regions and take differences between projected and base region
+		bevalM$Proj <- vector(mode="list", length=length(regions))
+		stat.methods <- c("Testing.data", "Cutoff", "Sensitivity", "Specificity")
 
 warning("TODO(drs): add code to measure degree of extrapolation")
 if (FALSE) {
-	# based on ExDet by Mesgaran, M.B., Cousens, R.D. & Webber, B.L. (2014) Here be dragons: a tool for quantifying novelty due to covariate range and correlation change when projecting species distribution models. Diversity & Distributions, 20: 1147–1159, DOI: 10.1111/ddi.12209
-	# but their tool is standalone, instead use modified code from https://pvanb.wordpress.com/2014/05/13/a-new-method-and-tool-exdet-to-evaluate-novelty-environmental-conditions/
-	# calculate NT2:
+# based on ExDet by Mesgaran, M.B., Cousens, R.D. & Webber, B.L. (2014) Here be dragons: a tool for quantifying novelty due to covariate range and correlation change when projecting species distribution models. Diversity & Distributions, 20: 1147–1159, DOI: 10.1111/ddi.12209
+# but their tool is standalone, instead use modified code from https://pvanb.wordpress.com/2014/05/13/a-new-method-and-tool-exdet-to-evaluate-novelty-environmental-conditions/
+# calculate NT2:
 
 }
-	
-			for(ir in c(baseRegion, seq_along(regions)[-baseRegion])){
-				temp.Eval <- array(NA,dim=c(length(eval.methods), length(stat.methods), temp <- apply(ids, 2, max)),
-								   dimnames=list(eval.methods, stat.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
-				temp.Prob <- array(NA,dim=c(2, temp),
-								   dimnames=list(c('rmse','mae'), eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
 
-				#Evaluate projections based on complete dataset
-				data.probs <- probData[[paste(type,error,sep="_")]][(climData[, "region"] == regions[ir])]
+		for(ir in c(baseRegion, seq_along(regions)[-baseRegion])){
+			temp.Eval <- array(NA,dim=c(length(eval.methods), length(stat.methods), temp <- apply(ids, 2, max)),
+							   dimnames=list(eval.methods, stat.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
+			temp.Prob <- array(NA,dim=c(2, temp),
+							   dimnames=list(c('rmse','mae'), eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
 
-				for(j in 1:nrow(ids)){
-				  data.obs <- obsData[[paste(type,error,sep="_")]][(climData[, "region"] == regions[ir]), ids[j, "realizations"]]
-				  FittedData <- bsub[[j]]$Proj[[ir]]$Proj$pred/1000
-				  temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- 
-					get.cutoff(pred = FittedData,
-							   obs = data.obs,
-							   pred.eval = FittedData,
-							   obs.eval = data.obs,
-							   method = eval.methods)[,stat.methods]
-  
-				  temp.Prob['rmse', ids[j, "realizations"], ids[j, "run"]] <- rmse(obs=data.probs, pred = FittedData)
-				  temp.Prob['mae', ids[j, "realizations"], ids[j, "run"]]  <- mae(obs=data.probs, pred = FittedData)
-  
-				}
+			#Evaluate projections based on complete dataset
+			data.probs <- probData[[paste(type,error,sep="_")]][(climData[, "region"] == regions[ir])]
 
-				#Differences to base region
-				if(ir == baseRegion){#Code assumes that ir takes as first value the value of base region
-				  base.Eval <- temp.Eval
-				  base.Prob <- temp.Prob
-				}
-				diff.Eval <- temp.Eval - base.Eval
-				diff.Prob <- temp.Prob - base.Prob
+			for(j in 1:nrow(ids)){
+			  data.obs <- obsData[[paste(type,error,sep="_")]][(climData[, "region"] == regions[ir]), ids[j, "realizations"]]
+			  FittedData <- bsub[[j]]$Proj[[ir]]$Proj$pred/1000
+			  temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- 
+				get.cutoff(pred = FittedData,
+						   obs = data.obs,
+						   pred.eval = FittedData,
+						   obs.eval = data.obs,
+						   method = eval.methods)[,stat.methods]
 
-				#Aggregated evaluations
-				bevalM$Proj[[ir]]$Eval$mean <- apply(temp.Eval, MARGIN=c(1, 2), FUN=mean, na.rm=TRUE)
-				bevalM$Proj[[ir]]$Eval$sd   <- apply(temp.Eval, MARGIN=c(1, 2), FUN=sd, na.rm=TRUE)
-				bevalM$Proj[[ir]]$Eval$quantiles <- apply(temp.Eval, MARGIN=c(1, 2), FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
-				bevalM$Proj[[ir]]$EvalDiffToBase$mean <- apply(diff.Eval, MARGIN=c(1, 2), FUN=mean, na.rm=TRUE)
-				bevalM$Proj[[ir]]$EvalDiffToBase$sd   <- apply(diff.Eval, MARGIN=c(1, 2), FUN=sd, na.rm=TRUE)
-				bevalM$Proj[[ir]]$EvalDiffToBase$quantiles <- apply(diff.Eval, MARGIN=c(1, 2), FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
+			  temp.Prob['rmse', ids[j, "realizations"], ids[j, "run"]] <- rmse(obs=data.probs, pred = FittedData)
+			  temp.Prob['mae', ids[j, "realizations"], ids[j, "run"]]  <- mae(obs=data.probs, pred = FittedData)
 
-				#Evaluate projections against underlying probabilities
-				bevalM$Proj[[ir]]$EvalProb$mean <- apply(temp.Prob, MARGIN=1, FUN=mean, na.rm=TRUE)
-				bevalM$Proj[[ir]]$EvalProb$sd <- apply(temp.Prob, MARGIN=1, FUN=sd, na.rm=TRUE)
-				bevalM$Proj[[ir]]$EvalProb$quantiles <- apply(temp.Prob, MARGIN=1, FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
-				bevalM$Proj[[ir]]$EvalProbDiffToBase$mean <- apply(diff.Prob, MARGIN=1, FUN=mean, na.rm=TRUE)
-				bevalM$Proj[[ir]]$EvalProbDiffToBase$sd <- apply(diff.Prob, MARGIN=1, FUN=sd, na.rm=TRUE)
-				bevalM$Proj[[ir]]$EvalProbDiffToBase$quantiles <- apply(diff.Prob, MARGIN=1, FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
 			}
-		
+
+			#Differences to base region
+			if(ir == baseRegion){#Code assumes that ir takes as first value the value of base region
+			  base.Eval <- temp.Eval
+			  base.Prob <- temp.Prob
+			}
+			diff.Eval <- temp.Eval - base.Eval
+			diff.Prob <- temp.Prob - base.Prob
+
+			#Aggregated evaluations
+			bevalM$Proj[[ir]]$Eval$mean <- apply(temp.Eval, MARGIN=c(1, 2), FUN=mean, na.rm=TRUE)
+			bevalM$Proj[[ir]]$Eval$sd   <- apply(temp.Eval, MARGIN=c(1, 2), FUN=sd, na.rm=TRUE)
+			bevalM$Proj[[ir]]$Eval$quantiles <- apply(temp.Eval, MARGIN=c(1, 2), FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
+			bevalM$Proj[[ir]]$EvalDiffToBase$mean <- apply(diff.Eval, MARGIN=c(1, 2), FUN=mean, na.rm=TRUE)
+			bevalM$Proj[[ir]]$EvalDiffToBase$sd   <- apply(diff.Eval, MARGIN=c(1, 2), FUN=sd, na.rm=TRUE)
+			bevalM$Proj[[ir]]$EvalDiffToBase$quantiles <- apply(diff.Eval, MARGIN=c(1, 2), FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
+
+			#Evaluate projections against underlying probabilities
+			bevalM$Proj[[ir]]$EvalProb$mean <- apply(temp.Prob, MARGIN=1, FUN=mean, na.rm=TRUE)
+			bevalM$Proj[[ir]]$EvalProb$sd <- apply(temp.Prob, MARGIN=1, FUN=sd, na.rm=TRUE)
+			bevalM$Proj[[ir]]$EvalProb$quantiles <- apply(temp.Prob, MARGIN=1, FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
+			bevalM$Proj[[ir]]$EvalProbDiffToBase$mean <- apply(diff.Prob, MARGIN=1, FUN=mean, na.rm=TRUE)
+			bevalM$Proj[[ir]]$EvalProbDiffToBase$sd <- apply(diff.Prob, MARGIN=1, FUN=sd, na.rm=TRUE)
+			bevalM$Proj[[ir]]$EvalProbDiffToBase$quantiles <- apply(diff.Prob, MARGIN=1, FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
 		}
+	
 		
 		writeRDS(bevalM, file = ftemp)
 	}
@@ -667,7 +680,7 @@ map_distributions <- function(Obs, Fit, XY, model, fun = mean, maxPred = 1000, f
   plot(XY, pch=15, cex=0.43, col=cols[findInterval(preds,xseq)], asp=1, xlab="", ylab="", axes=FALSE)
   axis(side=1)
   axis(side=2)
-  points(XY, pch=16, cex=ifelse(obs > 0, 0.06 + 0.25*obs, 0), col=col2alpha("black", 0.4))
+  points(XY, pch=16, cex=ifelse(obs > 0, 0.06 + 0.25*obs, 0), col = adjustcolor("black", alpha.f = 0.4))
   mtext(text=model)
   
   #Legend
@@ -851,10 +864,10 @@ plot_responseCurves2 <- function(newdata, Prob, Obs, Fit, respCurvePreds, model,
       x <- aggR2s[, 1, 1, 3] + if(isScaled) centerMeans[grep(sub("Scaled", "", colnames(respCurvePreds[[1]][[1]])[1]), names(centerMeans))] else 0
       polygon(x=c(x, rev(x)), 
               y=c(aggR2s[, 2, 1, 1], rev(aggR2s[, 2, 1, 5])), 
-              border=NA, col=col2alpha("blue", 0.3))
+              border=NA, col = adjustcolor("blue", alpha.f = 0.3))
       polygon(x=c(x, rev(x)), 
               y=c(aggR2s[, 2, 1, 2], rev(aggR2s[, 2, 1, 4])), 
-              border=NA, col=col2alpha("orange", 0.9))
+              border=NA, col = adjustcolor("orange", alpha.f = 0.9))
       lines(	x=x,
              y=aggR2s[, 2, 1, 3], lwd=1, col="black")
     }
@@ -873,10 +886,10 @@ plot_responseCurves2 <- function(newdata, Prob, Obs, Fit, respCurvePreds, model,
       x <- aggR2s[, 1, 2, 3] + if(isScaled) centerMeans[grep(sub("Scaled", "", colnames(respCurvePreds[[1]][[2]])[1]), names(centerMeans))] else 0
       polygon(x=c(aggR2s[, 2, 2, 1], rev(aggR2s[, 2, 2, 5])), 
               y=c(x, rev(x)), 
-              border=NA, col=col2alpha("blue", 0.3))
+              border=NA, col = adjustcolor("blue", alpha.f = 0.3))
       polygon(x=c(aggR2s[, 2, 2, 2], rev(aggR2s[, 2, 2, 4])), 
               y=c(x, rev(x)), 
-              border=NA, col=col2alpha("orange", 0.9))
+              border=NA, col = adjustcolor("orange", alpha.f = 0.9))
       lines(	x=aggR2s[, 2, 2, 3],
              y=x, lwd=1, col="black")
     }
@@ -944,10 +957,10 @@ plot_responseCurves_CurvesOnly <- function(newdata, Prob, Obs, Fit, respCurvePre
       x <- aggR2s[, 1, env.ind, 3] + if(isScaled) centerMeans[grep(sub("Scaled", "", colnames(respCurvePreds[[1]][[env.ind]])[1]), names(centerMeans))] else 0
       polygon(x=c(x, rev(x)), 
               y=c(aggR2s[, 2, env.ind, 1], rev(aggR2s[, 2, env.ind, 5])), 
-              border=NA, col=col2alpha("blue", 0.3))
+              border=NA, col = adjustcolor("blue", alpha.f = 0.3))
       polygon(x=c(x, rev(x)), 
               y=c(aggR2s[, 2, env.ind, 2], rev(aggR2s[, 2, env.ind, 4])), 
-              border=NA, col=col2alpha("orange", 0.9))
+              border=NA, col = adjustcolor("orange", alpha.f = 0.9))
       lines(	x=x,
              y=aggR2s[, 2, env.ind, 3], lwd=1, col="black")
     }

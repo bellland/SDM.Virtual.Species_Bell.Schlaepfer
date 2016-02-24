@@ -10,6 +10,7 @@
 
 
 ## Actions
+action <- "continue" # "new", restart all computations; "continue", attempts account for already completed simulations
 do.ExampleForDropbox <- FALSE #set this to TRUE to access/write to 'Example' subset on dropbox
 do.SDMs <- TRUE
 do.Partition <- FALSE
@@ -20,11 +21,11 @@ do.Figures <- FALSE
 
 ##
 ## Load libraries
-libraries <- c("reshape2", "mgcv", "seqinr", "raster","parallel","mvtnorm")
-	libraries <- c(libraries, "randomForest", "gbm", "maxent")
+libraries <- c("reshape2", "mgcv", "raster", "parallel", "mvtnorm", "randomForest", "gbm", "maxent")
 temp <- lapply(libraries, FUN=require, character.only=TRUE)
 
-date.run <- "20160222" #label for output folders (20140228; 20140304; 20140314; 20140320; 20140321; 20140627; 20150130)
+date.run <- "20160223" #label for output folders (20140228; 20140304; 20140314; 20140320; 20140321; 20140627; 20150130)
+if (do.ExampleForDropbox) date.run <- paste0(date.run, "_Example")
 
 ## Directories
 computer <- "Daniel" # "Dave"
@@ -32,34 +33,35 @@ computer <- "Daniel" # "Dave"
 if (computer == "Dave") {
 	dir.prj <- "E:/Work_Share_Dave_SDM&ResponseCurves"
 	path.functions <-"E:/Dropbox/Work_Share_Dave_SDM&ResponseCurves/BIOMOD2" 
-	dir.loc <- dir.prj
+	dir.big <- dir.prj
 } else if (computer == "Daniel") {
 	dir.prj <- "~/Dropbox/Work_Stuff/2_Research/200907_UofWyoming_PostDoc/Product21_SDM_AsymmetryResponseCurve/3_Simulations"
-	path.functions <- file.path(dir.prj, "SDM.Virtual.Species_Bell.Schlaepfer", "code")
-	dir.loc <- dir.prj
-	#dir.prj <- "/Users/drschlaep/Dropbox/Work_Share_Dave_SDM&ResponseCurves"
-	#dir.loc <- "/Users/drschlaep/Documents/drschlaepfer/2_Research/200907_UofWyoming_PostDoc/Projects_My/Product21_SDM_AsymmetryResponseCurve/2_Data"
+	path.functions <- file.path(dir.prj, "code")
+	dir.big <- "~/Downloads/Product21_SDM_AsymmetryResponseCurve"
 } else stop(computer, " is not implemented")
 
-dir.in <- file.path(dir.prj, "data", "csv.files")
-dir.gis <- file.path(dir.prj, "data", "rasters")
-dir.dat <- if (do.ExampleForDropbox) file.path(dir.prj, "dataExample") else file.path(dir.loc, "data")
-dir.sdm <- file.path(dir.dat, if (do.ExampleForDropbox) "biomodSDMsExample" else paste("biomodSDMs", date.run, sep="_"))
-dir.out <- file.path(dir.prj, if (do.ExampleForDropbox) "FiguresExample" else "Figures", "SDMs")
-dir.maps <- file.path(dir.out, paste0("Maps_", date.run))
-dir.figs <- file.path(dir.out, paste0("Plots_", date.run))
-dir.tables <- file.path(dir.out, paste0("Tables_", date.run))
+dir.dat <- file.path(normalizePath(dir.prj), "inst", "extdata")
+dir.in <- file.path(dir.dat, "csv.files")
+dir.gis <- file.path(dir.dat, "rasters")
+dir.res <- file.path(normalizePath(dir.big), "Output")
+dir.sdm <- file.path(dir.res, paste0("SDMs_", date.run))
+dir.maps <- file.path(dir.res, paste0("Maps_", date.run))
+dir.figs <- file.path(dir.res, paste0("Plots_", date.run))
+dir.tables <- file.path(dir.res, paste0("Tables_", date.run))
+temp <- lapply(c(dir.sdm, dir.maps, dir.figs, dir.tables), function(x) dir.create(path = x, showWarnings=FALSE, recursive=TRUE))
+
 
 ## Settings
 num_cores <- 22
 parallel_backend <- "snow" # "snow" (here, using sockets; don't use with too many SDMs) or "mpi" (requiring a MPI installed)
-fflag <- if (do.ExampleForDropbox) "vExample" else paste0("v2_", date.run)
-filename.runRequests <- paste0("runRequests_", fflag, ".RData")
+fflag <- paste0("v2_", date.run)
+filename.runRequests <- paste0("runIDs_", fflag, ".RData")
 filename.saveSDMs <- paste0("SDMs_", fflag, ".RData")
 filename.saveEvals <- paste0("SDMs_Evaluations_", fflag, ".RData")
 filename.saveParts <- paste0("SDMs_VarPartition_", fflag, ".RData")
-filename.saveComplexity <- paste0("SDMs_ModelComplexity_0", fflag, ".RData")
-filename.saveTypeData <- paste0("TypeData_", date.run, ".RData")
+filename.saveComplexity <- paste0("SDMs_ModelComplexity_", fflag, ".RData")
+filename.saveTypeData <- paste0("TypeData_", fflag, ".RData")
+
 baseRegion <- 2 #NorthWest
 regions <- 1:4
 types <- c("AIF", "SCT", "SIF", "SIT")
@@ -67,7 +69,7 @@ mlevels <- list(woInt=c("linear", "squared"), wInt=c("linear", "squared", "inter
 sdm.models <- c("GLM", "GAM", "MaxEnt", "RF", "BRT")
 eval.methods <- c('TSS','ROC','KAPPA')
 errors <- c("binom","binom+res","spatial","spatial+res")
-biomod2.NbRunEval <- switch(EXPR=paste0("v_", date.run),
+evaluationRepeatsN <- switch(EXPR=paste0("v_", date.run),
                             v_20140228=50,
                             v_20140304=10,
                             v_20140314=10,
@@ -76,7 +78,7 @@ biomod2.NbRunEval <- switch(EXPR=paste0("v_", date.run),
                             v_20140627=25,
                             v_20150130=25,
                             v_20160209=4,
-                            v_20160222=50)
+                            v_20160223=50)
 presenceRealizationsN <- switch(EXPR=paste0("v_", date.run),
                                 v_20140228=40,
                                 v_20140304=5,
@@ -86,31 +88,33 @@ presenceRealizationsN <- switch(EXPR=paste0("v_", date.run),
                                 v_20140627=25,
                                 v_20150130=25,
                                 v_20160209=4,
-                            	v_20160222=40)
+                            	v_20160223=40)
 predictorsN <- 10
 equalSamples <- FALSE #if TRUE, ensures that subsamples have the same number of presences as absences
 keepPart <- FALSE #if TRUE, keep all the evaluation numbers for each site as part of the variance partitioning
 
 
-## Define set of biomod runs
-if(file.exists(ftemp <- file.path(dir.dat, filename.runRequests))){
-	load(file = ftemp) #runRequests, runRequestsIDs
+## Define set of SDM runs
+if (action == "continue" && file.exists(ftemp <- file.path(dir.res, filename.runRequests))) {
+	load(file = ftemp) #runRequests, runRequestIDs, runEvals, runEvalIDs
 } else {
 	if (do.ExampleForDropbox) {
 		#runRequests <- runRequests[sample(x=nrow(runRequests), size=5), ]
 		runRequests <- rbind(runRequests[runRequests$models == "GLM" & runRequests$mlevels == "wInt" & runRequests$types=="AIF" & runRequests$run == 1, ][1:5, ],
 							 runRequests[runRequests$models == "GAM" & runRequests$mlevels == "woInt" & runRequests$types=="AIF" & runRequests$run == 1, ][1:5, ])
 	} else {
-		runRequests <- expand.grid(sdm.models, names(mlevels), types, errors,1:presenceRealizationsN, 1:biomod2.NbRunEval, stringsAsFactors=FALSE, KEEP.OUT.ATTRS=FALSE)
-		colnames(runRequests) <- c("models", "mlevels", "types", "errors","realizations", "run")
+		runRequests <- expand.grid(sdm.models, names(mlevels), types, errors, 1:presenceRealizationsN, 1:evaluationRepeatsN, stringsAsFactors=FALSE, KEEP.OUT.ATTRS=FALSE)
+		colnames(runRequests) <- c("models", "mlevels", "types", "errors", "realizations", "run")
 	}
-	runRequestsIDs <- apply(runRequests, MARGIN = 1, function(x) paste(trimws(x), collapse = "_"))
+	runRequestIDs <- apply(runRequests, MARGIN = 1, function(x) paste0("SDM_", paste(trimws(x), collapse = "_")))
 	
-	save(runRequests, runRequestsIDs, file=ftemp)
+	runEvals <- unique(runRequests[, c("models", "mlevels", "types", "errors")]) #get the unique combinations of model, type, and mlevel
+	runEvalIDs <- apply(runEvals, MARGIN = 1, function(x) paste0("Eval_", paste(trimws(x), collapse = "_")))
+	
+	save(runRequests, runRequestIDs, runEvals, runEvalIDs, file = ftemp)
 }
 
-runEvals <- unique(runRequests[, c("models", "mlevels", "types","errors")]) #get the unique combinations of model, type, and mlevel
-runFolders <- apply(unique(runRequests[, c("models", "types")]), 1, paste, collapse = "_")
+runFolders <- apply(unique(runEvals[, c("models", "types")]), 1, paste, collapse = "_")
 # nrow(runRequests) / length(runFolders) # we shouldn't have too many files per folder
 temp <- lapply(runFolders, function(x) dir.create(path = file.path(dir.sdm, x), showWarnings=FALSE, recursive=TRUE))
 
@@ -173,7 +177,7 @@ source(file.path(path.functions, "ResponseExtrapolation_Functions_Bell_and_Schla
 
 ################
 ## Read data from files once and generate observations
-if(file.exists(ftemp <- file.path(dir.in, filename.saveTypeData))){
+if (action == "continue" && file.exists(ftemp <- file.path(dir.res, filename.saveTypeData))) {
   print(paste(Sys.time(), ": Loading generated data"))
   load(ftemp)
   
@@ -230,17 +234,43 @@ if(file.exists(ftemp <- file.path(dir.in, filename.saveTypeData))){
 
 
 ## Build SDMs
-if(do.SDMs){
+if (do.SDMs) {
   print(paste(Sys.time(), ": SDMs started"))
     
   list.export <- c("libraries", "climData", "obsData", "probData", "centerMeansData", 
-                   "runRequests", "baseRegion", "regions", "mlevels", "sdm.models", 
+                   "runRequests", "runRequestIDs", "baseRegion", "regions", "mlevels", "sdm.models", 
                    "eval.methods", "predictorsN", "make.SDM", "set_Data", "calc_sdms", 
                    "set_options", "make_prediction", "make_projection","dir.sdm", "dir.in","equalSamples",
-                   "get.balanced.sample","get.cutoff", "our.response.plot2")
-  xt <- seq_len(nrow(runRequests))
-  if(length(xt) > 1){
-	  if(identical(parallel_backend, "mpi")){
+                   "get.balanced.sample","get.cutoff", "our.response.plot2", "get_temp_fname")
+
+
+	# determine which SDMs have already been calculated and stored to disk
+	xt <- seq_len(nrow(runRequests))
+
+	if (action == "continue") { 
+		fdone <- list.files(dir.sdm, pattern = "SDM_", recursive = TRUE)
+		
+		if (length(fdone) > 0) {
+			wd <- setwd(dir.sdm)
+			fsize <- file.info(fdone, extra_cols = FALSE)$size
+
+			fgood <- fsize > 1024
+			fbad <- !fgood
+			if (any(fbad)){
+				unlink(fbad)
+				fdone <- fdone[fgood]
+			}
+			setwd(wd)
+			
+			fbase <- sub(".rds", "", basename(fdone))
+			ifb <- match(fbase, table = runRequestIDs, nomatch = 0)
+			xt <- xt[-ifb]
+		}
+	}
+
+  # call make.SDM
+  if(length(xt) > 0){
+	  if (identical(parallel_backend, "mpi")) {
 		exportObjects(list.export)
 		mpi.bcast.cmd(lapply(libraries, FUN=require, character.only=TRUE))
 	
@@ -249,29 +279,25 @@ if(do.SDMs){
 		mpi.bcast.cmd(rm(list=ls()))
 		mpi.bcast.cmd(gc())
 	  }
-	  if(identical(parallel_backend, "snow")){
+	  if (identical(parallel_backend, "snow")) {
 		  clusterExport(cl, list.export)
 		  clusterEvalQ(cl, lapply(libraries, FUN=require, character.only=TRUE))
-	  
+
 		  idones <- parLapply(cl, x=xt, fun=function(i) try(make.SDM(i), silent=TRUE))
-	  
+
 		  clusterEvalQ(cl, rm(list=ls()))
 		  clusterEvalQ(cl, gc())
 	  }
-  } else {
-    idones <- as.list(make.SDM(1))
-  }
 
+	  badRuns <- sapply(idones, function(x) inherits(x, "try-error"))
+	  if (sum(badRuns) > 0) warning("There were ", sum(badRuns), " SDM runs that threw an error")
+  }
+  
 
   # Get data from disk
   bres <- list()
-  ib <- 1
-  for (i in xt) {
-  	temp <- readRDS(file = file.path(dir.sdm, paste(runRequests[i, c("models", "types")], collapse = "_"), paste0("SDM_", i, "_", paste(runRequests[i, ], collapse = "_"), ".rds")))
-  	if (!inherits(temp, "try-error")) {
-  		bres[[ib]] <- temp
-  		ib <- ib + 1
-  	}
+  for (i in seq_len(nrow(runRequests))) {
+  	bres[[i]] <- try(readRDS(file = get_temp_fname(runRequests[i, ], runRequestIDs[i])), silent = TRUE)
   }
   
   #Identify runs
@@ -284,10 +310,11 @@ if(do.SDMs){
   #runIDs = index for which row of runRequests corresponds to elements of bres
   runIDs <- na.exclude(match(apply(temp, 1, paste, collapse="_"), table=apply(runRequests, MARGIN=1, FUN=function(x) paste(trimws(x), collapse="_"))))
   
-  save(list = c("bres", "runIDs"), file=file.path(dir.dat, filename.saveSDMs))
+  # print(object.size(bres), units = "GB") # 25.6 Gb for length(bres) == 320000
+  save(list = c("bres", "runIDs"), file=file.path(dir.sdm, filename.saveSDMs))
   
+  # Model object sizes
   if (FALSE) {
-	  # Model object sizes
 	  msize <- data.frame(model = sapply(bres, function(x) x$runID$model),
 							size_MB = sapply(bres, function(x) object.size(x)))
 	  msize[, "size_MB"] <- msize[, "size_MB"] / 1024^2 # convert bytes -> MB
@@ -309,17 +336,16 @@ if(do.SDMs){
 			cat("\n")
 		}
   }
-  
     
   print(paste(Sys.time(), ": SDMs done"))
 }
 
 
-if(do.Partition){
+if (do.Partition) {
   print(paste(Sys.time(), ": Partition started"))
   
   if(!exists("bres") || !exists("runIDs")){
-    load(file.path(dir.dat, filename.saveSDMs))
+    load(file.path(dir.sdm, filename.saveSDMs))
   }
   
   stat.methods <- 'Testing.data'
@@ -334,10 +360,10 @@ if(do.Partition){
     part.mat <- cbind(runRequests,matrix(NA,nrow=nrow(runRequests),ncol=length(variables)))
     colnames(part.mat) <- c(colnames(runRequests),variables)
     
-    #get evaluation statistics
+    #get evaluation statistics (this takes about 1.24 s per iteration)
     
     for(i in 1:nrow(runRequests)){
-  		if (i %% 1000 == 1) print(paste(Sys.time(), ": Partition of region:", ir, "; runRequest:", i, "of", nrow(runRequest)))
+  		if (i %% 10 == 1) print(paste(Sys.time(), ": Partition of region:", ir, "; runRequest:", i, "of", nrow(runRequests)))
       
       prob <- probData[[paste(runRequests[i,'types'],runRequests[i,'errors'],sep="_")]][climData[,'region'] == ir]
       
@@ -420,7 +446,7 @@ if(do.Partition){
   }
   
   
-  save(part.region, file=file.path(dir.dat, filename.saveParts))
+  save(part.region, file=file.path(dir.res, filename.saveParts))
   
   var.sort <- c(2:(length(fnames)-1),1,length(fnames))
   reg.sort <- c(2,1,3,4)
@@ -434,7 +460,7 @@ if(do.Partition){
     for(i in 1:length(variables))
       part.mat[which(part.mat[,'metric'] == variables[i])[j],2+1:length(var.sort)] <- (part.region[[reg.sort[j]]][[i]]$prop[var.sort,3])
   
-  write.csv(part.mat,file.path(dir.out,"var.part.csv"),quote=FALSE)
+  write.csv(part.mat,file.path(dir.tables,"var.part.csv"),quote=FALSE)
   
   print(paste(Sys.time(), ": Partition done"))
   
@@ -446,7 +472,7 @@ if (do.Complexity) {
 	print(paste(Sys.time(), ": Model complexity started"))
 	
 	if(!exists("bres") || !exists("runIDs")){
-		load(file.path(dir.dat, filename.saveSDMs))
+		load(file.path(dir.sdm, filename.saveSDMs))
 	}
 	
 	edf <- rep(NA,length(bres))
@@ -466,9 +492,9 @@ if (do.Complexity) {
 					}
 	}
 
-	save(edf, file=file.path(dir.dat, filename.saveComplexity))
+	save(edf, file=file.path(dir.res, filename.saveComplexity))
 
-	png(paste(dir.out,"DF.png",sep="/"),width=6,height=4,units="in",res=600)
+	png(paste(dir.figs,"DF.png",sep="/"),width=6,height=4,units="in",res=600)
 	par(mar=c(8,4,1,1))
 	tmp <- boxplot(edf ~ apply(runRequests[, colnames(runEvals)],1,paste,collapse="_"),axes=FALSE,frame.plot=TRUE)
 	axis(2)
@@ -485,12 +511,12 @@ if(do.Evaluation){
   print(paste(Sys.time(), ": Evaluation started"))
   
   if(!exists("bres") || !exists("runIDs")){
-    load(file.path(dir.dat, filename.saveSDMs))
+    load(file.path(dir.sdm, filename.saveSDMs))
   }
   
   list.export <- c("libraries", "obsData","probData","climData","centerMeansData", "baseRegion", 
                    "eval2.SDMs", "regions", "eval.methods", "sdm.models", "rmse", "mae","get.cutoff",
-                   "dir.sdm", "dir.in")
+                   "dir.sdm", "dir.in", "get_temp_fname")
   if(identical(parallel_backend, "mpi")){
     exportObjects(c("work", list.export))
     mpi.bcast.cmd(lapply(libraries, FUN=require, character.only=TRUE))
@@ -538,7 +564,7 @@ if(do.Evaluation){
     mpi.bcast.cmd(gc())
   }
   if(identical(parallel_backend, "snow")){
-    clusterExport(cl, c("bres", "runRequests", "runEvals", "runIDs", list.export)) #TODO: exporting large bres will fail
+    clusterExport(cl, c("bres", "runRequests", "runRequestIDs", "runEvals", "runEvalIDs", "runIDs", list.export)) #TODO: exporting large bres will fail
     clusterEvalQ(cl, lapply(libraries, FUN=require, character.only=TRUE))
     
     list.noexport <- (temp <- ls())[!(temp %in% list.export)]
@@ -559,7 +585,7 @@ if(do.Evaluation){
   beval <- list()
   ib <- 1
   for (i in xt) {
-  	temp <- readRDS(file = file.path(dir.sdm, paste(runRequests[i, c("models", "types")], collapse = "_"), paste0("Eval_", i, "_", paste(runRequests[i, ], collapse = "_"), ".rds")))
+  	temp <- readRDS(file = get_temp_fname(runEvals[i, ], runEvalIDs[i]))
   	if (!inherits(temp, "try-error")) {
   		beval[[ib]] <- temp
   		ib <- ib + 1
@@ -577,7 +603,7 @@ if(do.Evaluation){
   #evalIDs = index for which row of runEvals corresponds to elements of beval
   evalIDs <- na.exclude(match(apply(temp, 1, paste, collapse="_"), table=apply(runEvals, 1, paste, collapse="_")))
   
-  save(beval, evalIDs, file=file.path(dir.dat, filename.saveEvals))
+  save(beval, evalIDs, file=file.path(dir.sdm, filename.saveEvals))
   
   print(paste(Sys.time(), ": Evaluation done"))
 }
@@ -588,7 +614,7 @@ if(do.EvaluationSummary){
   print(paste(Sys.time(), ": Evaluation summary started"))
   
   if(!exists("beval") || !exists("evalIDs")){
-    load(file.path(dir.dat, filename.saveEvals))
+    load(file.path(dir.sdm, filename.saveEvals))
   }
   
   #Fill evaluation arrays with values from bres
@@ -636,7 +662,7 @@ if(FALSE){
 	print(paste(Sys.time(), ": Figures started"))
 
 	if(!exists("bres") || !exists("runIDs")){
-		load(file.path(dir.dat, filename.saveSDMs))
+		load(file.path(dir.sdm, filename.saveSDMs))
 	}
 
 	for(i in 1:nrow(runEvals)){	
@@ -657,7 +683,7 @@ if(do.Figures){
 	print(paste(Sys.time(), ": Figures started"))
 
 	if(!exists("bres") || !exists("runIDs")){
-		load(file.path(dir.dat, filename.saveSDMs))
+		load(file.path(dir.sdm, filename.saveSDMs))
 	}
 
 	## Read rasters
@@ -936,7 +962,7 @@ for(re in runmods){
   
  # axis(side=1)
 #  axis(side=2)
-#  points(XY, pch=16, cex=ifelse(obs > 0, 0.06 + 0.25*obs, 0), col=col2alpha("black", 0.4))
+#  points(XY, pch=16, cex=ifelse(obs > 0, 0.06 + 0.25*obs, 0), col = adjustcolor("black", alpha.f = 0.4))
 #  mtext(text=model)
   
   #Legend
