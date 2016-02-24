@@ -334,7 +334,7 @@ calc_sdms <- function(type, error, model, bdat, bopt, eval.methods){
 							control = bopt$control,
 							x = FALSE, y = FALSE))["elapsed"]
     bsdms$m <- temp
-    bsdms$DEV <- deviance(bsdms)
+    bsdms$DEV <- deviance(bsdms$m)
     
   	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1])
   	pred.obs <- fitted(bsdms$m)
@@ -347,7 +347,7 @@ calc_sdms <- function(type, error, model, bdat, bopt, eval.methods){
                        data = data.tmp,
                        control = bopt$control))["elapsed"]
     bsdms$m <- temp
-    bsdms$DEV <- deviance(bsdms)
+    bsdms$DEV <- deviance(bsdms$m)
     
   	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1])
   	pred.obs <- fitted(bsdms$m)
