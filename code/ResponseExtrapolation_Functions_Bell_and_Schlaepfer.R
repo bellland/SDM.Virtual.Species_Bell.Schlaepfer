@@ -294,7 +294,7 @@ get.cutoff <- function(pred, obs, pred.eval, obs.eval, method){
 
 
 make_prediction <- function(bsdm, newData) {
-	if (inherits(bsdm, "glm") || inherits(bsdm, "gam")) {
+	if (inherits(bsdm, "glm") || inherits(bsdm, "gam")) { #gam objects inherit from classes glm and lm
 		preds <- predict(bsdm, newdata = newData, type = 'response', se.fit = FALSE)
 
 	} else if (inherits(bsdm, "maxent")) {
@@ -530,18 +530,23 @@ make.SDM <- function(i){
   
   
 		#clean fitted model objects, i.e., it will NOT work with predict.glm resp. predict.gam
-		bresM$SDMs$m <- if (inherits(bresM$SDMs$m, "glm")) {
+		bresM$SDMs$m <- if (identical(model, "GLM")) {
 							bresM$SDMs$m$family <- bresM$SDMs$m$family[c("family", "link")]
-							bresM$SDMs$m[c('coefficients', 'family', 'df.null', 'df.residual')]
-						} else if (inherits(bresM$SDMs$m, "gam")) {
+							bresM$SDMs$m$class <- "glm"
+							bresM$SDMs$m[c('coefficients', 'family', 'df.null', 'df.residual', 'class')]
+						} else if (identical(model, "GAM")) { # gam objects inherit from classes glm and lm
 							bresM$SDMs$m$family <- bresM$SDMs$m$family[c("family", "link")]
-							bresM$SDMs$m[c('coefficients', 'family', 'edf')]
-						} else if (inherits(bresM$SDMs$m, "maxent")) {
+							bresM$SDMs$m$class <- "gam"
+							bresM$SDMs$m[c('coefficients', 'family', 'edf', 'class')]
+						} else if (identical(bresM$SDMs$m, "MaxEnt")) {
+							bresM$SDMs$m$class <- "maxent"
 							bresM$SDMs$m
-						} else if (inherits(bresM$SDMs$m, "randomForest")) {
-							bresM$SDMs$m[c("type", "importance", "ntree", "mtry", "confusion")]
-						} else if (inherits(bresM$SDMs$m, "gbm")) {
-							bresM$SDMs$m[c("initF", "n.trees", "distribution", "interaction.depth")]
+						} else if (identical(bresM$SDMs$m, "RF")) {
+							bresM$SDMs$m$class <- "randomForest"
+							bresM$SDMs$m[c("type", "importance", "ntree", "mtry", "confusion", "class")]
+						} else if (identical(bresM$SDMs$m, "BRT")) {
+							bresM$SDMs$m$class <- "gbm"
+							bresM$SDMs$m[c("initF", "n.trees", "distribution", "interaction.depth", "class")]
 						}
 		
 		# Memoize the results
@@ -722,6 +727,37 @@ if (FALSE) {
 	}
   	
 	i
+}
+
+
+## Functions to estimate model complexity
+get_complexity <- function(i) {	
+	bresM <- try(readRDS(file = get_temp_fname(runRequests[i, ], runRequestIDs[i])), silent = TRUE)
+	res <- rep(NA, 2)
+	
+	if (!inherits(bresM, "try-error")) {
+		res[1] <- 	if(runRequests[i, "models"] == "GAM") {
+						sum(bresM$SDMs$m$edf)
+					} else if(runRequests[i, "models"] == "GLM") {
+						with(bresM$SDMs$m, df.null - df.residual + 1)
+					} else {
+						NA
+					}
+		res[2] <- bresM$SDMs$comp_time
+	}
+	
+	res
+}
+
+plot_complexity <- function(y, ylab, fname) {
+	png(file.path(dir.figs,fname),width=10,height=7,units="in",res=600)
+	op <- par(mar=c(12,4,1,1))
+	tmp <- boxplot(y ~ apply(runRequests[, colnames(runEvals)],1,paste,collapse="_"),axes=FALSE,frame.plot=TRUE)
+	axis(2)
+	axis(1,at = 1:length(tmp$names), labels = tmp$names,las=3,cex.axis=.85)
+	mtext(ylab,side=2,line=2.5)
+	par(op)
+	dev.off()
 }
 
 

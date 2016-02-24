@@ -61,7 +61,7 @@ filename.saveSDMs <- paste0("SDMs_", fflag, ".rds")
 filename.saveRunIDs <- paste0("runIDs_", fflag, ".rds")
 filename.saveEvals <- paste0("SDMs_Evaluations_", fflag, ".RData")
 filename.saveParts <- paste0("SDMs_VarPartition_", fflag, ".rds")
-filename.saveComplexity <- paste0("SDMs_ModelComplexity_", fflag, ".RData")
+filename.saveComplexity <- paste0("SDMs_ModelComplexity_", fflag, ".rds")
 filename.saveTypeData <- paste0("TypeData_", fflag, ".RData")
 
 baseRegion <- 2 #NorthWest
@@ -352,8 +352,6 @@ if (do.SDMs) {
 if (do.Partition) {
 	print(paste(Sys.time(), ": Partition started"))
   
-	if (!exists("runIDs")) runIDs <- readRDS(file = file.path(dir.sdm, filename.saveRunIDs))
-  
 	stat.methods <- 'Testing.data'
 	variables <- c('TSS','KAPPA','ROC','RMSE','MAE')
 	factors <- c('types',"errors",'models','mlevels','realizations')
@@ -362,6 +360,8 @@ if (do.Partition) {
 	if (action == "continue" && file.exists(pfile)) {
 		part.region <- readRDS(file = pfile)
 	} else {
+		if (!exists("runIDs")) runIDs <- readRDS(file = file.path(dir.sdm, filename.saveRunIDs))
+  
 		list.export <- c("climData", "obsData", "probData", "centerMeansData", "action",
 					   "runRequests", "runRequestIDs", "baseRegion", "regions", "factors", "variables",
 					   "get_region_eval", "get.cutoff", "eval.methods", "stat.methods", "rmse", "mae",
@@ -440,35 +440,32 @@ if (do.Partition) {
 if (do.Complexity) {
 	print(paste(Sys.time(), ": Model complexity started"))
 	
-	if (!exists("bres")) bres <- readRDS(file = file.path(dir.sdm, filename.saveSDMs))
-	if (!exists("runIDs")) runIDs <- readRDS(file = file.path(dir.sdm, filename.saveRunIDs))
+	cfile <- file.path(dir.tables, filename.saveComplexity)
+	if (action == "continue" && file.exists(cfile)) {
+		complexity <- readRDS(file = cfile)
+	} else {
+		if (!exists("runIDs")) runIDs <- readRDS(file = file.path(dir.sdm, filename.saveRunIDs))
 	
-	edf <- rep(NA,length(bres))
+		list.export <- c("get_complexity", "get_temp_fname", "runRequests", "runRequestIDs")
 
-	stop("TODO(drs): fix this: what are EDFs for RF, MaxEnt, and BRT?")
-	for(ee in 1:length(edf)){
-		edf[ee] <- if(runRequests[ee,"models"] == "GAM") {
-						sum(bres[[ee]]$SDMs$m$edf)
-					} else if(runRequests[ee,"models"] == "GLM") {
-						with(bresM$SDMs$m, df.null - df.residual + 1)
-					} else if (inherits(bresM$SDMs$m, "maxent")) {
-						NA
-					} else if (inherits(bresM$SDMs$m, "randomForest")) {
-						NA
-					} else if (inherits(bresM$SDMs$m, "gbm")) {
-						NA
-					}
+		if (identical(parallel_backend, "parallel")) {
+			clusterExport(cl, list.export)
+
+			idones <- parSapply(cl, runIDs, function(i) get_complexity(i), USE.NAMES = FALSE)
+
+			clusterEvalQ(cl, rm(list=ls()))
+			clusterEvalQ(cl, gc())
+		} else stop("this is not implemented 2")
+		
+		temp <- matrix(NA, nrow(runRequests), ncol = 2, dimnames = list(NULL, c("edf", "comp_time_s")))
+		temp[runIDs, ] <- t(idones)
+		
+		complexity <- cbind(runRequests, temp)
+		saveRDS(complexity, file = cfile)
 	}
 
-	save(edf, file=file.path(dir.res, filename.saveComplexity))
-
-	png(paste(dir.figs,"DF.png",sep="/"),width=6,height=4,units="in",res=600)
-	par(mar=c(8,4,1,1))
-	tmp <- boxplot(edf ~ apply(runRequests[, colnames(runEvals)],1,paste,collapse="_"),axes=FALSE,frame.plot=TRUE)
-	axis(2)
-	axis(1,at = 1:length(tmp$names), labels = tmp$names,las=3,cex.axis=.85)
-	mtext("Degrees of Freedom",side=2,line=2.5)
-	dev.off()
+	plot_complexity(y = complexity[, "edf"], ylab = "Degrees of Freedom", fname = "Complexity_DF.png")
+	plot_complexity(y = complexity[, "comp_time_s"], ylab = "Computation time (s)", fname = "Complexity_CompTime.png")
 
 	print(paste(Sys.time(), ": Model complexity done"))
 }
