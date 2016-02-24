@@ -12,8 +12,8 @@
 ## Actions
 action <- "continue" # "new", restart all computations; "continue", attempts account for already completed simulations
 do.ExampleForDropbox <- FALSE #set this to TRUE to access/write to 'Example' subset on dropbox
-do.SDMs <- TRUE
-do.Partition <- FALSE
+do.SDMs <- FALSE					# '20160223' with 320,000 runs: 2016/02/24 completed in 237 core-hours
+do.Partition <- TRUE				
 do.Complexity <- FALSE
 do.Evaluation <- FALSE
 do.EvaluationSummary <- FALSE
@@ -44,21 +44,23 @@ dir.dat <- file.path(normalizePath(dir.prj), "inst", "extdata")
 dir.in <- file.path(dir.dat, "csv.files")
 dir.gis <- file.path(dir.dat, "rasters")
 dir.res <- file.path(normalizePath(dir.big), "Output")
+dir.res2 <- file.path(normalizePath(dir.prj), "Output")
 dir.sdm <- file.path(dir.res, paste0("SDMs_", date.run))
-dir.maps <- file.path(dir.res, paste0("Maps_", date.run))
-dir.figs <- file.path(dir.res, paste0("Plots_", date.run))
-dir.tables <- file.path(dir.res, paste0("Tables_", date.run))
+dir.maps <- file.path(dir.res2, paste0("Maps_", date.run))
+dir.figs <- file.path(dir.res2, paste0("Plots_", date.run))
+dir.tables <- file.path(dir.res2, paste0("Tables_", date.run))
 temp <- lapply(c(dir.sdm, dir.maps, dir.figs, dir.tables), function(x) dir.create(path = x, showWarnings=FALSE, recursive=TRUE))
 
 
 ## Settings
 num_cores <- 22
-parallel_backend <- "snow" # "snow" (here, using sockets; don't use with too many SDMs) or "mpi" (requiring a MPI installed)
+parallel_backend <- "parallel" # "parallel" (here, uses sockets on windows and forks on unix systems) or "mpi" (requiring a MPI installed)
 fflag <- paste0("v2_", date.run)
-filename.runRequests <- paste0("runIDs_", fflag, ".RData")
-filename.saveSDMs <- paste0("SDMs_", fflag, ".RData")
+filename.runRequests <- paste0("runSetup_", fflag, ".RData")
+filename.saveSDMs <- paste0("SDMs_", fflag, ".rds")
+filename.saveRunIDs <- paste0("runIDs_", fflag, ".rds")
 filename.saveEvals <- paste0("SDMs_Evaluations_", fflag, ".RData")
-filename.saveParts <- paste0("SDMs_VarPartition_", fflag, ".RData")
+filename.saveParts <- paste0("SDMs_VarPartition_", fflag, ".rds")
 filename.saveComplexity <- paste0("SDMs_ModelComplexity_", fflag, ".RData")
 filename.saveTypeData <- paste0("TypeData_", fflag, ".RData")
 
@@ -91,7 +93,6 @@ presenceRealizationsN <- switch(EXPR=paste0("v_", date.run),
                             	v_20160223=40)
 predictorsN <- 10
 equalSamples <- FALSE #if TRUE, ensures that subsamples have the same number of presences as absences
-keepPart <- FALSE #if TRUE, keep all the evaluation numbers for each site as part of the variance partitioning
 
 
 ## Define set of SDM runs
@@ -154,16 +155,19 @@ if(identical(parallel_backend, "mpi")){
     }
   }
   
-} else if(identical(parallel_backend, "snow")){
-  stopifnot(require("snow"), require("doSNOW"))
-  libraries <- c(libraries, "snow", "doSNOW")
+} else if(identical(parallel_backend, "parallel")){
   
-  cl <- snow::makeSOCKcluster(num_cores)
-  registerDoSNOW(cl)
+	cl  <- if (.Platform$OS.type == "unix") {
+				makeCluster(num_cores, type = "FORK", outfile = "log_sdm.txt")
+			} else if (.Platform$OS.type == "windows") {
+				makeCluster(num_cores, type = "PSOCK", outfile = "log_sdm.txt")
+			} else {
+				stop("Running this code on this type of platform is currently not implemented.")
+			}
   
-  .Last <- function() { #Properly clean up snow before quitting R (e.g., at a crash)
+  .Last <- function() { #Properly clean up cluster before quitting R (e.g., at a crash)
     if(exists("stopCluster") && exists("cl")){
-      snow::stopCluster(cl)	#clean up snow cluster
+      stopCluster(cl)	#clean up cluster
     }
   }
 } else {
@@ -177,7 +181,8 @@ source(file.path(path.functions, "ResponseExtrapolation_Functions_Bell_and_Schla
 
 ################
 ## Read data from files once and generate observations
-if (action == "continue" && file.exists(ftemp <- file.path(dir.res, filename.saveTypeData))) {
+ftemp <- file.path(dir.res, filename.saveTypeData)
+if (action == "continue" && file.exists(ftemp)) {
   print(paste(Sys.time(), ": Loading generated data"))
   load(ftemp)
   
@@ -279,11 +284,11 @@ if (do.SDMs) {
 		mpi.bcast.cmd(rm(list=ls()))
 		mpi.bcast.cmd(gc())
 	  }
-	  if (identical(parallel_backend, "snow")) {
+	  if (identical(parallel_backend, "parallel")) {
 		  clusterExport(cl, list.export)
 		  clusterEvalQ(cl, lapply(libraries, FUN=require, character.only=TRUE))
 
-		  idones <- parLapply(cl, x=xt, fun=function(i) try(make.SDM(i), silent=TRUE))
+		  idones <- parLapply(cl, xt, function(i) try(make.SDM(i), silent=TRUE))
 
 		  clusterEvalQ(cl, rm(list=ls()))
 		  clusterEvalQ(cl, gc())
@@ -311,7 +316,9 @@ if (do.SDMs) {
   runIDs <- na.exclude(match(apply(temp, 1, paste, collapse="_"), table=apply(runRequests, MARGIN=1, FUN=function(x) paste(trimws(x), collapse="_"))))
   
   # print(object.size(bres), units = "GB") # 25.6 Gb for length(bres) == 320000
-  save(list = c("bres", "runIDs"), file=file.path(dir.sdm, filename.saveSDMs))
+  saveRDS(runIDs, file = file.path(dir.sdm, filename.saveRunIDs))
+  temp <- try(saveRDS(bres, file = file.path(dir.sdm, filename.saveSDMs)), silent = TRUE)
+  if (inherits(temp, "try-error")) warning("Saving the object 'bres' to disk failed likely because of insufficient memory: the size of 'bres' is ", print(object.size(bres), units = "GB"), " and up to twice as much memory is required: ", temp)
   
   # Model object sizes
   if (FALSE) {
@@ -336,134 +343,96 @@ if (do.SDMs) {
 			cat("\n")
 		}
   }
-    
+
+  rm(bres)
   print(paste(Sys.time(), ": SDMs done"))
 }
 
 
 if (do.Partition) {
-  print(paste(Sys.time(), ": Partition started"))
+	print(paste(Sys.time(), ": Partition started"))
   
-  if(!exists("bres") || !exists("runIDs")){
-    load(file.path(dir.sdm, filename.saveSDMs))
-  }
+	if (!exists("runIDs")) runIDs <- readRDS(file = file.path(dir.sdm, filename.saveRunIDs))
   
-  stat.methods <- 'Testing.data'
-  variables <- c('TSS','KAPPA','ROC','RMSE','MAE')
-  factors <- c('types',"errors",'models','mlevels','realizations')
+	stat.methods <- 'Testing.data'
+	variables <- c('TSS','KAPPA','ROC','RMSE','MAE')
+	factors <- c('types',"errors",'models','mlevels','realizations')
+	
+	pfile <- file.path(dir.res, filename.saveParts)
+	if (action == "continue" && file.exists(pfile)) {
+		part.region <- readRDS(file = pfile)
+	} else {
+		list.export <- c("climData", "obsData", "probData", "centerMeansData", "action",
+					   "runRequests", "runRequestIDs", "baseRegion", "regions", "factors", "variables",
+					   "get_region_eval", "get.cutoff", "eval.methods", "stat.methods", "rmse", "mae",
+					   "get_temp_fname", "dir.tables")
+		if (identical(parallel_backend, "parallel")) {
+			clusterExport(cl, list.export)
+		}
   
-  part.region <- list()	
-  
-  for(ir in regions){
-  	print(paste(Sys.time(), ": Partition of region:", ir))
+		part.region <- list()	
+		for(ir in regions){
+			print(paste(Sys.time(), ": Partition of region:", ir))
 
-    part.mat <- cbind(runRequests,matrix(NA,nrow=nrow(runRequests),ncol=length(variables)))
-    colnames(part.mat) <- c(colnames(runRequests),variables)
-    
-    #get evaluation statistics (this takes about 1.24 s per iteration)
-    
-    for(i in 1:nrow(runRequests)){
-  		if (i %% 10 == 1) print(paste(Sys.time(), ": Partition of region:", ir, "; runRequest:", i, "of", nrow(runRequests)))
-      
-      prob <- probData[[paste(runRequests[i,'types'],runRequests[i,'errors'],sep="_")]][climData[,'region'] == ir]
-      
-      obs  <- obsData[[paste(runRequests[i,'types'],runRequests[i,'errors'],sep="_")]][, runRequests[i,'realizations']][climData[,'region'] == ir]
-      
-      pred <- bres[[i]]$Proj[[ir]]$Proj$pred/1000
-      
-      cutoff <- get.cutoff(pred = pred,
-                           obs = obs,
-                           pred.eval = pred,
-                           obs.eval = obs,
-                           method = eval.methods)[,stat.methods]
-      
-      if('TSS' %in% variables) part.mat[i,'TSS'] <- cutoff['TSS']
-      if('ROC' %in% variables) part.mat[i,'ROC'] <- cutoff['ROC']
-      if('KAPPA' %in% variables) part.mat[i,'KAPPA'] <- cutoff['KAPPA']
-      if('RMSE' %in% variables) part.mat[i,'RMSE'] <- rmse(obs=prob, pred=pred)
-      if('MAE' %in% variables) part.mat[i,'MAE'] <- mae(obs=prob, pred=pred)
-      
-    }
-    
-    #run ANOVAs to estimate partitioning of variation
-    
-    part.out <- vector(mode="list", length=length(variables))
-    names(part.out) <- variables
-    
-    for(j in 1:length(variables)){
-  		print(paste(Sys.time(), ": Partition of region:", ir, "; variable:", j, "of", length(variables)))
+			#get evaluation statistics (this takes about 1.24 s per iteration)
+			ftemp1 <- file.path(dir.tables, paste0("Partition_Evals_region", ir, "_temp1.rds"))
+			if (action == "continue" && file.exists(ftemp1)) {
+				part.mat <- readRDS(file = ftemp1)
+			} else {
+				part.mat <- cbind(runRequests,matrix(NA,nrow=nrow(runRequests),ncol=length(variables)))
+				colnames(part.mat) <- c(colnames(runRequests),variables)
+	
+				if (identical(parallel_backend, "parallel")) {
+					clusterExport(cl, "ir")
 
-      tmp <- part.mat[,c(variables[j],colnames(runRequests))]
-      colnames(tmp) <- c('y',colnames(runRequests))
-      tmp <- as.data.frame(tmp)
-      
-      tmp$realizations <- apply(tmp[,factors],1,paste,collapse=".")
-      
-      fit <- aov(y ~ factor(types)*factor(errors)*factor(models)*factor(mlevels) + Error(realizations),data=tmp) 
-      
-      fnames <- rownames(summary(fit)[[1]][[1]])
-        ftmp <- strsplit(fnames,split = c("\\:"))
-        for(ff in 1:(length(ftmp)-1)){
-          for(hh in 1:length(ftmp[[ff]])){
-            htmp <- strsplit(ftmp[[ff]][hh],split=NULL)[[1]][-(1:6)]
-            ftmp[[ff]][hh] <- paste(htmp[htmp != ")" & htmp != "(" & htmp!= " "],collapse="")
-          }
-        }
-      
-      htmp <- strsplit(ftmp[[length(ftmp)]][1],split=NULL)[[1]]
-      ftmp[[length(ftmp)]] <- paste(htmp[htmp!= " "],collapse="")
-      
-      fnames <- c("realizations",unlist(lapply(ftmp,paste, collapse=":")))
-      
-      prop <- as.data.frame(matrix(NA,nrow=length(fnames),ncol=3))
-      colnames(prop) <- c('factor','SS','prop')
-      prop[,1] <- fnames
-      
-      #extract sum of squares
-      prop[-1,2] <- summary(fit)[[1]][[1]][,2]
-      prop[1,2]  <- summary(fit)[[2]][[1]][,2]
-      
-      #calculate proportion of variation explained
-      prop[,3] <- as.numeric(prop[,2]) / sum(as.numeric(prop[,2]))
-      
-      part.out[[j]] <- vector(mode="list", length=1)
-      names(part.out) <- c('prop')
-      
-      if(keepPart) {
-        part.out[[j]] <- vector(mode="list", length=2)
-        names(part.out) <- c('eval','prop')
-        part.out[[j]]$eval <- part.mat
-        
-      }
-      
-      part.out[[j]]$prop <- prop
-      
-    }
-    
-    
-    part.region[[ir]]<- part.out
-    
-  }
+					idones <- parSapply(cl, runIDs, function(i) get_region_eval(i), USE.NAMES = FALSE)
+
+					clusterEvalQ(cl, gc())
+				} else stop("this is not implemented 1")
+		
+				temp <- t(idones)
+				temp <- temp[order(temp[, 1]), ]
+				part.mat[temp[, 1], variables] <- temp[, -1]
+
+				saveRDS(part.mat, file = ftemp1)
+			}
+	
+			#run ANOVAs to estimate partitioning of variation
+			if (identical(parallel_backend, "parallel")) {
+				clusterExport(cl, c("ir", "part.mat"))
+
+				part.out <- parLapply(cl, seq_along(variables), function(j) calc_region_partition(j))
+
+				clusterEvalQ(cl, gc())
+			} else stop("this is not implemented 1")
+		
+			names(part.out) <- variables
+			part.region[[ir]]<- part.out
+		}
   
+		saveRDS(part.region, file = pfile)
+
+		if (identical(parallel_backend, "parallel")) {
+			clusterEvalQ(cl, rm(list=ls()))
+			clusterEvalQ(cl, gc())
+		}
+	}
   
-  save(part.region, file=file.path(dir.res, filename.saveParts))
+	var.sort <- c(2:(length(fnames)-1),1,length(fnames))
+	reg.sort <- c(2,1,3,4)
   
-  var.sort <- c(2:(length(fnames)-1),1,length(fnames))
-  reg.sort <- c(2,1,3,4)
-  
-  part.mat <- matrix(NA,nrow=length(reg.sort)*length(variables),ncol=length(var.sort)+2)
+	part.mat <- matrix(NA,nrow=length(reg.sort)*length(variables),ncol=length(var.sort)+2)
     colnames(part.mat) <- c('region','metric',(part.region[[1]][[2]]$prop[var.sort,1]))
     part.mat[,'region'] <- rep(c('NR','SR','SW','GP'),each=length(variables))
     part.mat[,'metric'] <- rep(variables,times=length(regions))
   
-  for(j in 1:length(reg.sort))
-    for(i in 1:length(variables))
-      part.mat[which(part.mat[,'metric'] == variables[i])[j],2+1:length(var.sort)] <- (part.region[[reg.sort[j]]][[i]]$prop[var.sort,3])
+	for(j in 1:length(reg.sort))
+		for(i in 1:length(variables))
+			part.mat[which(part.mat[,'metric'] == variables[i])[j],2+1:length(var.sort)] <- (part.region[[reg.sort[j]]][[i]]$prop[var.sort,3])
   
-  write.csv(part.mat,file.path(dir.tables,"var.part.csv"),quote=FALSE)
+	write.csv(part.mat,file.path(dir.tables,"var.part.csv"),quote=FALSE)
   
-  print(paste(Sys.time(), ": Partition done"))
-  
+	print(paste(Sys.time(), ": Partition done"))
 }
 
 
@@ -471,9 +440,8 @@ if (do.Partition) {
 if (do.Complexity) {
 	print(paste(Sys.time(), ": Model complexity started"))
 	
-	if(!exists("bres") || !exists("runIDs")){
-		load(file.path(dir.sdm, filename.saveSDMs))
-	}
+	if (!exists("bres")) bres <- readRDS(file = file.path(dir.sdm, filename.saveSDMs))
+	if (!exists("runIDs")) runIDs <- readRDS(file = file.path(dir.sdm, filename.saveRunIDs))
 	
 	edf <- rep(NA,length(bres))
 
@@ -510,9 +478,8 @@ stop("here done")
 if(do.Evaluation){
   print(paste(Sys.time(), ": Evaluation started"))
   
-  if(!exists("bres") || !exists("runIDs")){
-    load(file.path(dir.sdm, filename.saveSDMs))
-  }
+	if (!exists("bres")) bres <- readRDS(file = file.path(dir.sdm, filename.saveSDMs))
+	if (!exists("runIDs")) runIDs <- readRDS(file = file.path(dir.sdm, filename.saveRunIDs))
   
   list.export <- c("libraries", "obsData","probData","climData","centerMeansData", "baseRegion", 
                    "eval2.SDMs", "regions", "eval.methods", "sdm.models", "rmse", "mae","get.cutoff",
@@ -563,7 +530,7 @@ if(do.Evaluation){
     mpi.bcast.cmd(rm(list=ls()))
     mpi.bcast.cmd(gc())
   }
-  if(identical(parallel_backend, "snow")){
+  if(identical(parallel_backend, "parallel")){
     clusterExport(cl, c("bres", "runRequests", "runRequestIDs", "runEvals", "runEvalIDs", "runIDs", list.export)) #TODO: exporting large bres will fail
     clusterEvalQ(cl, lapply(libraries, FUN=require, character.only=TRUE))
     
@@ -661,9 +628,8 @@ if(FALSE){
 
 	print(paste(Sys.time(), ": Figures started"))
 
-	if(!exists("bres") || !exists("runIDs")){
-		load(file.path(dir.sdm, filename.saveSDMs))
-	}
+	if (!exists("bres")) bres <- readRDS(file = file.path(dir.sdm, filename.saveSDMs))
+	if (!exists("runIDs")) runIDs <- readRDS(file = file.path(dir.sdm, filename.saveRunIDs))
 
 	for(i in 1:nrow(runEvals)){	
 		type <- runEvals[i, "types"]
@@ -682,9 +648,9 @@ if(FALSE){
 if(do.Figures){
 	print(paste(Sys.time(), ": Figures started"))
 
-	if(!exists("bres") || !exists("runIDs")){
-		load(file.path(dir.sdm, filename.saveSDMs))
-	}
+	if (!exists("bres")) bres <- readRDS(file = file.path(dir.sdm, filename.saveSDMs))
+	if (!exists("runIDs")) runIDs <- readRDS(file = file.path(dir.sdm, filename.saveRunIDs))
+
 
 	## Read rasters
 	grids <- list()
@@ -739,7 +705,7 @@ if(do.Figures){
 		mpi.bcast.cmd(rm(list=ls()))
 		mpi.bcast.cmd(gc())
 	}
-	if(identical(parallel_backend, "snow")){
+	if(identical(parallel_backend, "parallel")){
 		clusterExport(cl, c("bres", "runRequests", "runEvals", "runIDs", list.export)) #TODO: exporting large bres will fail
 		clusterEvalQ(cl, lapply(libraries, FUN=require, character.only=TRUE))
 	

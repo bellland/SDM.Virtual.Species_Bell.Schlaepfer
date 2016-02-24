@@ -556,6 +556,71 @@ make.SDM <- function(i){
 rmse <- function(obs, pred, na.rm=FALSE) sqrt(mean((obs - pred) ^ 2, na.rm=na.rm))
 mae <- function(obs, pred, na.rm=FALSE) mean(abs(obs - pred), na.rm=na.rm)
 
+get_region_eval <- function(i) {
+	res <- matrix(NA, nrow = 1, ncol = 1 + length(variables), dimnames = list(NULL, c("runID", variables)))
+	res[, "runID"] <- i
+	
+	prob <- probData[[paste(runRequests[i,'types'],runRequests[i,'errors'],sep="_")]][climData[,'region'] == ir]
+	obs  <- obsData[[paste(runRequests[i,'types'],runRequests[i,'errors'],sep="_")]][, runRequests[i,'realizations']][climData[,'region'] == ir]
+
+  	bresM <- try(readRDS(file = get_temp_fname(runRequests[i, ], runRequestIDs[i])), silent = TRUE)
+	if (!inherits(bresM, "try-error")) {
+		pred <- bresM$Proj[[ir]]$Proj$pred/1000
+
+		cutoff <- get.cutoff(pred = pred,
+						   obs = obs,
+						   pred.eval = pred,
+						   obs.eval = obs,
+						   method = eval.methods)[,stat.methods]
+
+		if('TSS' %in% variables) res[, 'TSS'] <- cutoff['TSS']
+		if('ROC' %in% variables) res[, 'ROC'] <- cutoff['ROC']
+		if('KAPPA' %in% variables) res[, 'KAPPA'] <- cutoff['KAPPA']
+		if('RMSE' %in% variables) res[, 'RMSE'] <- rmse(obs=prob, pred=pred)
+		if('MAE' %in% variables) res[, 'MAE'] <- mae(obs=prob, pred=pred)
+	}
+	
+	res
+}
+
+calc_region_partition <- function(j) {
+	ftemp2 <- file.path(dir.tables, paste0("Partition_Props_region", ir, "_var", j, "_temp2.rds"))
+	if (action == "continue" && file.exists(ftemp2)) {
+		prop <- readRDS(file = ftemp2)
+	} else {
+		print(paste(Sys.time(), ": Partition of region:", ir, "; variable:", j, "of", length(variables)))
+
+		tmp <- part.mat[,c(variables[j], colnames(runRequests))]
+		colnames(tmp) <- c('y',colnames(runRequests))
+
+		tmp$realizations <- apply(tmp[,factors],1,paste,collapse=".")
+
+		mfit <- aov(y ~ factor(types)*factor(errors)*factor(models)*factor(mlevels) + Error(realizations),data=tmp) 
+		sfit <- summary(mfit)
+
+		if (length(sfit) == 2) {
+			fnames <- rownames(sfit[["Error: realizations"]][[1]])
+			fnames <- c("realizations", gsub("factor(", "", gsub(")", "", trimws(fnames), fixed = TRUE), fixed = TRUE))
+
+			prop <- as.data.frame(matrix(NA,nrow=length(fnames),ncol=3))
+			colnames(prop) <- c('factor','SS','prop')
+			prop[,1] <- fnames
+
+			#extract sum of squares
+			prop[1, "SS"]  <- sfit[["Error: Within"]][[1]][, "Sum Sq"]
+			prop[-1, "SS"] <- sfit[["Error: realizations"]][[1]][, "Sum Sq"]
+
+			#calculate proportion of variation explained
+			prop[, 'prop'] <- as.numeric(prop[, "SS"]) / sum(as.numeric(prop[, "SS"]))
+		} else {
+			prop <- NULL
+		}
+		
+		saveRDS(prop, file = ftemp2)
+	}
+	prop
+}
+
 
 eval2.SDMs <- function(i, runEval, type, error, mlevel, model, runID, bsub){
 	ftemp <- get_temp_fname(runEvals[i, ], runEvalIDs[i])
