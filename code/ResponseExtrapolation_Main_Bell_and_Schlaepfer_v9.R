@@ -14,14 +14,14 @@ action <- "continue" # "new", restart all computations; "continue", attempts acc
 do.ExampleForDropbox <- FALSE #set this to TRUE to access/write to 'Example' subset on dropbox
 do.SDMs <- FALSE					# '20160223' with 320,000 runs: 2016/02/24 completed in 237 core-hours
 do.Partition <- TRUE				
-do.Complexity <- FALSE
-do.Evaluation <- FALSE
-do.EvaluationSummary <- FALSE
+do.Complexity <- TRUE
+do.Evaluation <- TRUE
+do.EvaluationSummary <- TRUE
 do.Figures <- FALSE
 
 ##
 ## Load libraries
-libraries <- c("reshape2", "mgcv", "raster", "parallel", "mvtnorm", "randomForest", "gbm", "maxent")
+libraries <- c("parallel")
 temp <- lapply(libraries, FUN=require, character.only=TRUE)
 
 date.run <- "20160223" #label for output folders (20140228; 20140304; 20140314; 20140320; 20140321; 20140627; 20150130)
@@ -59,7 +59,8 @@ fflag <- paste0("v2_", date.run)
 filename.runRequests <- paste0("runSetup_", fflag, ".RData")
 filename.saveSDMs <- paste0("SDMs_", fflag, ".rds")
 filename.saveRunIDs <- paste0("runIDs_", fflag, ".rds")
-filename.saveEvals <- paste0("SDMs_Evaluations_", fflag, ".RData")
+filename.saveEvals <- paste0("SDMs_Evaluations_", fflag, ".rds")
+filename.saveEvalIDs <- paste0("evalIDs_", fflag, ".rds")
 filename.saveParts <- paste0("SDMs_VarPartition_", fflag, ".rds")
 filename.saveComplexity <- paste0("SDMs_ModelComplexity_", fflag, ".rds")
 filename.saveTypeData <- paste0("TypeData_", fflag, ".RData")
@@ -71,6 +72,8 @@ mlevels <- list(woInt=c("linear", "squared"), wInt=c("linear", "squared", "inter
 sdm.models <- c("GLM", "GAM", "MaxEnt", "RF", "BRT")
 eval.methods <- c('TSS','ROC','KAPPA')
 errors <- c("binom","binom+res","spatial","spatial+res")
+quantile.probs <- c(0.025, 0.05, 0.25, 0.5, 0.75, 0.95, 0.975)
+
 evaluationRepeatsN <- switch(EXPR=paste0("v_", date.run),
                             v_20140228=50,
                             v_20140304=10,
@@ -130,7 +133,6 @@ num_cores <- min(num_cores, parallel::detectCores() - 2)
 
 if(identical(parallel_backend, "mpi")){
   stopifnot(require("Rmpi"))
-  libraries <- c(libraries, "Rmpi")
   
   .Last <- function() { #Properly clean up mpi before quitting R (e.g., at a crash)
     if(is.loaded("mpi_initialize") && exists("mpi.comm.size")){
@@ -242,12 +244,12 @@ if (action == "continue" && file.exists(ftemp)) {
 if (do.SDMs) {
   print(paste(Sys.time(), ": SDMs started"))
     
+  libraries <- c("mgcv", "randomForest", "gbm", "maxent")
   list.export <- c("libraries", "climData", "obsData", "probData", "centerMeansData", 
                    "runRequests", "runRequestIDs", "baseRegion", "regions", "mlevels", "sdm.models", 
                    "eval.methods", "predictorsN", "make.SDM", "set_Data", "calc_sdms", 
                    "set_options", "make_prediction", "make_projection","dir.sdm", "dir.in","equalSamples",
                    "get.balanced.sample","get.cutoff", "our.response.plot2", "get_temp_fname")
-
 
 	# determine which SDMs have already been calculated and stored to disk
 	xt <- seq_len(nrow(runRequests))
@@ -277,7 +279,7 @@ if (do.SDMs) {
   if(length(xt) > 0){
 	  if (identical(parallel_backend, "mpi")) {
 		exportObjects(list.export)
-		mpi.bcast.cmd(lapply(libraries, FUN=require, character.only=TRUE))
+		mpi.bcast.cmd(lapply(c("Rmpi", libraries), FUN=require, character.only=TRUE))
 	
 		idones <- mpi.applyLB(x=xt, fun=make.SDM)
 	
@@ -469,21 +471,21 @@ if (do.Complexity) {
 
 	print(paste(Sys.time(), ": Model complexity done"))
 }
-stop("here done")
+
 
 ## Evaluate SDMs
-if(do.Evaluation){
+if (do.Evaluation) {
   print(paste(Sys.time(), ": Evaluation started"))
   
-	if (!exists("bres")) bres <- readRDS(file = file.path(dir.sdm, filename.saveSDMs))
 	if (!exists("runIDs")) runIDs <- readRDS(file = file.path(dir.sdm, filename.saveRunIDs))
   
-  list.export <- c("libraries", "obsData","probData","climData","centerMeansData", "baseRegion", 
-                   "eval2.SDMs", "regions", "eval.methods", "sdm.models", "rmse", "mae","get.cutoff",
-                   "dir.sdm", "dir.in", "get_temp_fname")
   if(identical(parallel_backend, "mpi")){
+	if (!exists("bres")) bres <- readRDS(file = file.path(dir.sdm, filename.saveSDMs))
+	  list.export <- c("obsData","probData","climData","centerMeansData", "baseRegion", 
+					   "eval2.SDMs", "regions", "eval.methods", "sdm.models", "rmse", "mae","get.cutoff",
+					   "dir.sdm", "dir.in", "get_temp_fname")
     exportObjects(c("work", list.export))
-    mpi.bcast.cmd(lapply(libraries, FUN=require, character.only=TRUE))
+    mpi.bcast.cmd(lapply("Rmpi", FUN=require, character.only=TRUE))
     mpi.bcast.cmd(work())
     
     jobs <- 1:nrow(runEvals)
@@ -527,34 +529,42 @@ if(do.Evaluation){
     mpi.bcast.cmd(rm(list=ls()))
     mpi.bcast.cmd(gc())
   }
-  if(identical(parallel_backend, "parallel")){
-    clusterExport(cl, c("bres", "runRequests", "runRequestIDs", "runEvals", "runEvalIDs", "runIDs", list.export)) #TODO: exporting large bres will fail
-    clusterEvalQ(cl, lapply(libraries, FUN=require, character.only=TRUE))
-    
-    list.noexport <- (temp <- ls())[!(temp %in% list.export)]
-    idone <- foreach(i=1:nrow(runEvals), .errorhandling="pass", .noexport=list.noexport) %dopar% {
-      type <- runEvals[i, "types"]
-      error <- runEvals[i,"errors"]
-      mlevel <- runEvals[i, "mlevels"]
-      model <- runEvals[i, "models"]
-      runID <- with(runRequests[runIDs, ], which(types == type & errors == error & mlevels == mlevel & models == model))
-      eval2.SDMs(i, runEval=runEvals[i, ], type=type, error = error, mlevel=mlevel, model=model, runID=runID, bsub=bres[runID])
-    }
-    
-    clusterEvalQ(cl, rm(list=ls()))
-    clusterEvalQ(cl, gc())
-  }
 
-  # Get data from disk
-  beval <- list()
-  ib <- 1
-  for (i in xt) {
-  	temp <- readRDS(file = get_temp_fname(runEvals[i, ], runEvalIDs[i]))
-  	if (!inherits(temp, "try-error")) {
-  		beval[[ib]] <- temp
-  		ib <- ib + 1
-  	}
-  }
+	if(identical(parallel_backend, "parallel")){
+		cl2 <- if (num_cores > 8) {
+					if (.Platform$OS.type == "unix") {
+						makeCluster(8, type = "FORK", outfile = "log_sdm.txt")
+					} else if (.Platform$OS.type == "windows") {
+						makeCluster(8, type = "PSOCK", outfile = "log_sdm.txt")
+					} else {
+						stop("Running this code on this type of platform is currently not implemented.")
+					}
+				} else cl
+
+		list.export <- c("eval3.SDMs", "get_temp_fname", "get.cutoff", "rsme", "mae",
+						"runEvals", "runEvalIDs", "runRequests", "runRequestIDs", "runIDs",
+						"eval.methods", "quantile.probs", "regions", "baseRegion",
+						"probData", "climData", "obsData")
+		clusterExport(cl2, list.export)
+
+		idones <- parLapply(cl2, 1:nrow(runEvals), function(i) try(eval3.SDMs(i), silent=TRUE))
+		
+		if (num_cores > 8) {
+			stopCluster(cl2)
+		} else {
+			clusterEvalQ(cl2, rm(list=ls()))
+			clusterEvalQ(cl2, gc())
+		}
+		
+		badRuns <- sapply(idones, function(x) inherits(x, "try-error"))
+		if (sum(badRuns) > 0) warning("There were ", sum(badRuns), " evaluations that threw an error")
+	}
+
+	# Get data from disk
+	beval <- list()
+	for (i in seq_len(nrow(runEvals))) {
+		beval[[i]] <- try(readRDS(file = get_temp_fname(runEvals[i, ], runEvalIDs[i])), silent = TRUE)
+	}
 
   
   #Identify runs
@@ -567,58 +577,64 @@ if(do.Evaluation){
   #evalIDs = index for which row of runEvals corresponds to elements of beval
   evalIDs <- na.exclude(match(apply(temp, 1, paste, collapse="_"), table=apply(runEvals, 1, paste, collapse="_")))
   
-  save(beval, evalIDs, file=file.path(dir.sdm, filename.saveEvals))
+  saveRDS(evalIDs, file = file.path(dir.sdm, filename.saveEvalIDs))
+  temp <- try(saveRDS(beval, file = file.path(dir.sdm, filename.saveEvals)), silent = TRUE)
+  if (inherits(temp, "try-error")) warning("Saving the object 'beval' to disk failed likely because of insufficient memory: the size of 'beval' is ", print(object.size(beval), units = "GB"), " and up to twice as much memory is required: ", temp)
   
+  rm(beval)
   print(paste(Sys.time(), ": Evaluation done"))
 }
 
 
 ## Summarize model evaluations
-if(do.EvaluationSummary){
+if (do.EvaluationSummary) {
   print(paste(Sys.time(), ": Evaluation summary started"))
+
+	libraries <- c("reshape2")
+	temp <- lapply(libraries, FUN=require, character.only=TRUE)
+
+	if (!exists("evalIDs")) evalIDs <- readRDS(file = file.path(dir.sdm, filename.saveEvalIDs))
   
-  if(!exists("beval") || !exists("evalIDs")){
-    load(file.path(dir.sdm, filename.saveEvals))
-  }
+	#Fill evaluation arrays with values from bres
+	evalA_SDMs <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(sdm.models), length(eval.methods)+1, 2), dimnames=list(types,errors, names(mlevels), sdm.models, c(eval.methods, "Deviance"), c("mean", "sd")))
+	evalA_Proj <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(regions), length(sdm.models), length(eval.methods)+2, 2), dimnames=list(types,errors, names(mlevels), paste0("region", regions), sdm.models, c(eval.methods, "RMSE", "MAE"), c("mean", "sd")))
+	evalA_ProjDiffs <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(regions), length(sdm.models), length(eval.methods)+2, 2), dimnames=list(types,errors, names(mlevels), paste0("region", regions), sdm.models, c(eval.methods, "RMSE", "MAE"), c("mean", "sd")))
   
-  #Fill evaluation arrays with values from bres
-  evalA_SDMs <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(sdm.models), length(eval.methods)+1, 2), dimnames=list(types,errors, names(mlevels), sdm.models, c(eval.methods, "Deviance"), c("mean", "sd")))
-  evalA_Proj <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(regions), length(sdm.models), length(eval.methods)+2, 2), dimnames=list(types,errors, names(mlevels), paste0("region", regions), sdm.models, c(eval.methods, "RMSE", "MAE"), c("mean", "sd")))
-  evalA_ProjDiffs <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(regions), length(sdm.models), length(eval.methods)+2, 2), dimnames=list(types,errors, names(mlevels), paste0("region", regions), sdm.models, c(eval.methods, "RMSE", "MAE"), c("mean", "sd")))
+	for(i in evalIDs){
+		bevalM <- try(readRDS(file = get_temp_fname(runEvals[i, ], runEvalIDs[i])), silent = TRUE)
+
+		evalID <- evalIDs[i]
+		it <- which(runEvals[i, "types"] == types)
+		ie <- which(runEvals[i, "errors"] == errors)
+		il <- which(runEvals[i, "mlevels"] == names(mlevels))
+		im <- which(runEvals[i, "models"] == sdm.models)
+
+		evalA_SDMs[it, ie, il, im, , "mean"] <- as.numeric(c(t(bevalM$Eval$mean[, "Testing.data"]), bevalM$Deviance["mean"]))
+		evalA_SDMs[it, ie, il, im, , "sd"] <- as.numeric(c(t(bevalM$Eval$sd[, "Testing.data"]), bevalM$Deviance["sd"]))
+		for(ir in seq_along(regions)){
+			evalA_Proj[it, ie, il, ir, im, , "mean"] <- as.numeric(c(t(bevalM$Proj[[ir]]$Eval$mean[, "Testing.data"]), bevalM$Proj[[ir]]$EvalProb$mean))
+			evalA_Proj[it, ie, il, ir, im, , "sd"] <- as.numeric(c(t(bevalM$Proj[[ir]]$Eval$sd[, "Testing.data"]), bevalM$Proj[[ir]]$EvalProb$sd))
+			evalA_ProjDiffs[it, ie, il, ir, im, , "mean"] <- as.numeric(c(t(bevalM$Proj[[ir]]$EvalDiffToBase$mean[, "Testing.data"]), bevalM$Proj[[ir]]$EvalProbDiffToBase$mean))
+			evalA_ProjDiffs[it, ie, il, ir, im, , "sd"] <- as.numeric(c(t(bevalM$Proj[[ir]]$EvalDiffToBase$sd[, "Testing.data"]), bevalM$Proj[[ir]]$EvalProbDiffToBase$sd))
+		}
+	}
   
-  for(i in evalIDs){
-    evalID <- evalIDs[i]
-    it <- which(runEvals[i, "types"] == types)
-    ie <- which(runEvals[i, "errors"] == errors)
-    il <- which(runEvals[i, "mlevels"] == names(mlevels))
-    im <- which(runEvals[i, "models"] == sdm.models)
-    
-    evalA_SDMs[it, ie, il, im, , "mean"] <- as.numeric(c(t(beval[[evalID]]$Eval$mean[, "Testing.data"]), beval[[evalID]]$Deviance["mean"]))
-    evalA_SDMs[it, ie, il, im, , "sd"] <- as.numeric(c(t(beval[[evalID]]$Eval$sd[, "Testing.data"]), beval[[evalID]]$Deviance["sd"]))
-    for(ir in seq_along(regions)){
-      evalA_Proj[it, ie, il, ir, im, , "mean"] <- as.numeric(c(t(beval[[evalID]]$Proj[[ir]]$Eval$mean[, "Testing.data"]), beval[[evalID]]$Proj[[ir]]$EvalProb$mean))
-      evalA_Proj[it, ie, il, ir, im, , "sd"] <- as.numeric(c(t(beval[[evalID]]$Proj[[ir]]$Eval$sd[, "Testing.data"]), beval[[evalID]]$Proj[[ir]]$EvalProb$sd))
-      evalA_ProjDiffs[it, ie, il, ir, im, , "mean"] <- as.numeric(c(t(beval[[evalID]]$Proj[[ir]]$EvalDiffToBase$mean[, "Testing.data"]), beval[[evalID]]$Proj[[ir]]$EvalProbDiffToBase$mean))
-      evalA_ProjDiffs[it, ie, il, ir, im, , "sd"] <- as.numeric(c(t(beval[[evalID]]$Proj[[ir]]$EvalDiffToBase$sd[, "Testing.data"]), beval[[evalID]]$Proj[[ir]]$EvalProbDiffToBase$sd))
-    }
-    
-  }
+	#Reshape arrays into matrices
+	evalT_SDMs <- acast(melt(evalA_SDMs), formula=Var1+Var2+Var3+Var4~Var5+Var6)
+	evalT_Proj <- acast(melt(evalA_Proj), formula=Var1+Var2+Var3+Var4+Var5~Var6+Var7)
+	evalT_ProjDiffs <- acast(melt(evalA_ProjDiffs), formula=Var1+Var2+Var3+Var4+Var5~Var6+Var7)
+
+	write.csv(evalT_SDMs, file=file.path(dir.tables, "Table_EvaluationModels.csv"))
+	write.csv(evalT_Proj, file=file.path(dir.tables, "Table_EvaluationProjections.csv"))
+	write.csv(evalT_ProjDiffs, file=file.path(dir.tables, "Table_EvaluationDifferencesProjections.csv"))
   
-  #Reshape arrays into matrices
-  evalT_SDMs <- acast(melt(evalA_SDMs), formula=Var1+Var2+Var3+Var4~Var5+Var6)
-  evalT_Proj <- acast(melt(evalA_Proj), formula=Var1+Var2+Var3+Var4+Var5~Var6+Var7)
-  evalT_ProjDiffs <- acast(melt(evalA_ProjDiffs), formula=Var1+Var2+Var3+Var4+Var5~Var6+Var7)
-  
-  write.csv(evalT_SDMs, file=file.path(dir.tables, "Table_EvaluationModels.csv"))
-  write.csv(evalT_Proj, file=file.path(dir.tables, "Table_EvaluationProjections.csv"))
-  write.csv(evalT_ProjDiffs, file=file.path(dir.tables, "Table_EvaluationDifferencesProjections.csv"))
-  
-  #Dave's figures
+	#Dave's figures
 	try(source(file.path(path.functions, "ResponseExtrapolation_PlotPerformance_Bell_and_Schlaepfer.R")))
  
-  print(paste(Sys.time(), ": Evaluation summary done"))
+	print(paste(Sys.time(), ": Evaluation summary done"))
 }
 
+stop("reworked until here")
 
 #does a serialized version work
 if(FALSE){
@@ -645,6 +661,9 @@ if(FALSE){
 if(do.Figures){
 	print(paste(Sys.time(), ": Figures started"))
 
+	libraries <- c("raster")
+	temp <- lapply(libraries, FUN=require, character.only=TRUE)
+
 	if (!exists("bres")) bres <- readRDS(file = file.path(dir.sdm, filename.saveSDMs))
 	if (!exists("runIDs")) runIDs <- readRDS(file = file.path(dir.sdm, filename.saveRunIDs))
 
@@ -658,7 +677,7 @@ if(do.Figures){
 		"dir.sdm", "dir.in", "dir.maps", "dir.figs")
 	if(identical(parallel_backend, "mpi")){
 		exportObjects(c("work", list.export))
-		mpi.bcast.cmd(lapply(libraries, FUN=require, character.only=TRUE))
+		mpi.bcast.cmd(lapply(c("Rmpi", libraries), FUN=require, character.only=TRUE))
 		mpi.bcast.cmd(work())
 
 		jobs <- 1:nrow(runEvals)

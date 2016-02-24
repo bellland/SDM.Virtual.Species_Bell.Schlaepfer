@@ -729,6 +729,108 @@ if (FALSE) {
 	i
 }
 
+eval3.SDMs <- function(i){
+	ftemp <- get_temp_fname(runEvals[i, ], runEvalIDs[i])
+	if (!file.exists(ftemp)) {
+		print(paste(Sys.time(), "eval3.SDMs:", i, paste(runEvals[i, ], collapse = "-")))
+
+		type <- runEvals[i, "types"]
+		error <- runEvals[i, "errors"]
+		xt <- with(runRequests, which(types == type & errors == error & mlevels == runEvals[i, "mlevels"] & models == runEvals[i, "models"]))
+		xt <- xt[xt %in% runIDs]
+		
+		bsub <- lapply(xt, function(x) try(readRDS(file = get_temp_fname(runRequests[x, ], runRequestIDs[x])), silent = TRUE))
+	  	ibad <- sapply(bsub, function(x) inherits(x, "try-error"))
+		if (sum(ibad) > 0) bsub <- bsub[!ibad]
+		if (length(bsub) == 0) stop("bsub does not contain data")
+
+		ids <- matrix(unlist(t(sapply(bsub, FUN=function(l) l$runID))[, c("realizations", "run")]), ncol=2, byrow=FALSE, dimnames=list(NULL, c("realizations", "run")))
+
+		#Prepare result container
+		bevalM <- vector(mode="list", length=4)
+		names(bevalM) <- c("evalID", "Eval", "Deviance", "Proj") #removed variable importance for now
+		bevalM$evalID <- runEvals[i, ]
+
+		#Evaluate models based on evaluation datasplits and realizations
+		stat.methods <- c('Testing.data','Evaluating.data','Cutoff','Sensitivity','Specificity')
+		temp.Eval <- array(NA,dim=c(length(eval.methods), length(stat.methods), temp <- apply(ids, 2, max)),
+						 dimnames=list(eval.methods, stat.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
+		temp.Dev <- array(NA, dim=temp)
+
+		for (j in 1:nrow(ids)){
+			temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- bsub[[j]]$SDMs$cutoff[,stat.methods]
+			temp <- bsub[[j]]$SDMs$DEV
+			temp.Dev[ids[j, "realizations"], ids[j, "run"]] <- if (is.null(temp)) NA else temp
+		}
+
+		bevalM$Eval$mean <- apply(temp.Eval, MARGIN=c(1,2), FUN=mean, na.rm=TRUE)
+		bevalM$Eval$sd   <- apply(temp.Eval, MARGIN=c(1,2), FUN=sd, na.rm=TRUE)
+		bevalM$Eval$quantiles   <- apply(temp.Eval, MARGIN=c(1,2),FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
+		bevalM$Deviance$mean <- mean(temp.Dev, na.rm=TRUE)
+		bevalM$Deviance$sd <- sd(temp.Dev, na.rm=TRUE)
+		bevalM$Deviance$quantiles <- quantile(temp.Dev, probs=quantile.probs, type=8, na.rm=TRUE)
+
+		#Project models onto all regions and take differences between projected and base region
+		bevalM$Proj <- vector(mode="list", length=length(regions))
+		stat.methods <- c("Testing.data", "Cutoff", "Sensitivity", "Specificity")
+
+		for(ir in c(baseRegion, seq_along(regions)[-baseRegion])){
+			temp.Eval <- array(NA,dim=c(length(eval.methods), length(stat.methods), temp <- apply(ids, 2, max)),
+							   dimnames=list(eval.methods, stat.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
+			temp.Prob <- array(NA,dim=c(2, temp),
+							   dimnames=list(c('rmse','mae'), eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
+
+			#Evaluate projections based on complete dataset
+			data.probs <- probData[[paste(type,error,sep="_")]][(climData[, "region"] == regions[ir])]
+
+			for(j in 1:nrow(ids)){
+			  data.obs <- obsData[[paste(type,error,sep="_")]][(climData[, "region"] == regions[ir]), ids[j, "realizations"]]
+			  FittedData <- bsub[[j]]$Proj[[ir]]$Proj$pred/1000
+			  temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- 
+				get.cutoff(pred = FittedData,
+						   obs = data.obs,
+						   pred.eval = FittedData,
+						   obs.eval = data.obs,
+						   method = eval.methods)[,stat.methods]
+
+			  temp.Prob['rmse', ids[j, "realizations"], ids[j, "run"]] <- rmse(obs=data.probs, pred = FittedData)
+			  temp.Prob['mae', ids[j, "realizations"], ids[j, "run"]]  <- mae(obs=data.probs, pred = FittedData)
+
+			}
+
+			#Differences to base region
+			if(ir == baseRegion){#Code assumes that ir takes as first value the value of base region
+			  base.Eval <- temp.Eval
+			  base.Prob <- temp.Prob
+			}
+			diff.Eval <- temp.Eval - base.Eval
+			diff.Prob <- temp.Prob - base.Prob
+
+			#Aggregated evaluations
+			bevalM$Proj[[ir]]$Eval$mean <- apply(temp.Eval, MARGIN=c(1, 2), FUN=mean, na.rm=TRUE)
+			bevalM$Proj[[ir]]$Eval$sd   <- apply(temp.Eval, MARGIN=c(1, 2), FUN=sd, na.rm=TRUE)
+			bevalM$Proj[[ir]]$Eval$quantiles <- apply(temp.Eval, MARGIN=c(1, 2), FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
+			bevalM$Proj[[ir]]$EvalDiffToBase$mean <- apply(diff.Eval, MARGIN=c(1, 2), FUN=mean, na.rm=TRUE)
+			bevalM$Proj[[ir]]$EvalDiffToBase$sd   <- apply(diff.Eval, MARGIN=c(1, 2), FUN=sd, na.rm=TRUE)
+			bevalM$Proj[[ir]]$EvalDiffToBase$quantiles <- apply(diff.Eval, MARGIN=c(1, 2), FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
+
+			#Evaluate projections against underlying probabilities
+			bevalM$Proj[[ir]]$EvalProb$mean <- apply(temp.Prob, MARGIN=1, FUN=mean, na.rm=TRUE)
+			bevalM$Proj[[ir]]$EvalProb$sd <- apply(temp.Prob, MARGIN=1, FUN=sd, na.rm=TRUE)
+			bevalM$Proj[[ir]]$EvalProb$quantiles <- apply(temp.Prob, MARGIN=1, FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
+			bevalM$Proj[[ir]]$EvalProbDiffToBase$mean <- apply(diff.Prob, MARGIN=1, FUN=mean, na.rm=TRUE)
+			bevalM$Proj[[ir]]$EvalProbDiffToBase$sd <- apply(diff.Prob, MARGIN=1, FUN=sd, na.rm=TRUE)
+			bevalM$Proj[[ir]]$EvalProbDiffToBase$quantiles <- apply(diff.Prob, MARGIN=1, FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
+		}
+	
+		
+		writeRDS(bevalM, file = ftemp)
+	}
+  	
+	i
+}
+
+
 
 ## Functions to estimate model complexity
 get_complexity <- function(i) {	
