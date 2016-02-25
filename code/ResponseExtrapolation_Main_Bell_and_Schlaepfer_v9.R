@@ -12,9 +12,11 @@
 ## Actions
 action <- "continue" # "new", restart all computations; "continue", attempts account for already completed simulations
 do.ExampleForDropbox <- FALSE #set this to TRUE to access/write to 'Example' subset on dropbox
+
 do.SDMs <- FALSE					# '20160223' with 320,000 runs: 2016/02/24 completed in 237 core-hours
-do.Partition <- TRUE				
-do.Complexity <- TRUE
+do.RegionEvals <- TRUE				# 
+do.Partition <- FALSE				
+do.Complexity <- FALSE				# '20160223' with 320,000 runs: 2016/02/25 completed in 1.5 core-hours
 do.Evaluation <- TRUE
 do.EvaluationSummary <- TRUE
 do.Figures <- FALSE
@@ -70,7 +72,8 @@ regions <- 1:4
 types <- c("AIF", "SCT", "SIF", "SIT")
 mlevels <- list(woInt=c("linear", "squared"), wInt=c("linear", "squared", "interaction"))
 sdm.models <- c("GLM", "GAM", "MaxEnt", "RF", "BRT")
-eval.methods <- c('TSS','ROC','KAPPA')
+eval_disc.methods <- c('TSS','ROC','KAPPA')
+eval_cont.methods <- c('RMSE', 'MAE')
 errors <- c("binom","binom+res","spatial","spatial+res")
 quantile.probs <- c(0.025, 0.05, 0.25, 0.5, 0.75, 0.95, 0.975)
 
@@ -247,7 +250,7 @@ if (do.SDMs) {
   libraries <- c("mgcv", "randomForest", "gbm", "maxent")
   list.export <- c("libraries", "climData", "obsData", "probData", "centerMeansData", 
                    "runRequests", "runRequestIDs", "baseRegion", "regions", "mlevels", "sdm.models", 
-                   "eval.methods", "predictorsN", "make.SDM", "set_Data", "calc_sdms", 
+                   "eval_disc.methods", "predictorsN", "make.SDM", "set_Data", "calc_sdms", 
                    "set_options", "make_prediction", "make_projection","dir.sdm", "dir.in","equalSamples",
                    "get.balanced.sample","get.cutoff", "our.response.plot2", "get_temp_fname")
 
@@ -351,11 +354,37 @@ if (do.SDMs) {
 }
 
 
+## Calculate model evaluations for each region and each runRequests (and save on disk) - these will be used by do.Partition and do.Evaluation
+if (do.RegionEvals) {
+	print(paste(Sys.time(), ": Region evaluations started"))
+	
+	if (!exists("runIDs")) runIDs <- readRDS(file = file.path(dir.sdm, filename.saveRunIDs))
+  
+	list.export <- c("climData", "obsData", "probData",
+				   "runRequests", "runRequestIDs", "regions", "eval_disc.methods", "eval_cont.methods", 
+				   "calc_eval_regions", "get.cutoff", "rmse", "mae",
+				   "get_temp_fname", "dir.sdm")
+				   
+	if (identical(parallel_backend, "parallel")) {
+		clusterExport(cl, list.export)
+		
+		# one call to calc_eval_regions() if the evaluation has to be freshly calculated takes about 3.7 core-seconds
+		# expected time for 320,000 calls is 15 wall-time hours
+		idones <- parLapply(cl, runIDs, function(i) calc_eval_regions(i))
+
+		clusterEvalQ(cl, rm(list=ls()))
+		clusterEvalQ(cl, gc())
+	} else stop("this is not implemented 3")
+	
+	rm(idones)
+}
+
+
 if (do.Partition) {
 	print(paste(Sys.time(), ": Partition started"))
   
 	stat.methods <- 'Testing.data'
-	variables <- c('TSS','KAPPA','ROC','RMSE','MAE')
+	variables <- c(eval_disc.methods, eval_cont.methods)
 	factors <- c('types',"errors",'models','mlevels','realizations')
 	
 	pfile <- file.path(dir.res, filename.saveParts)
@@ -365,9 +394,9 @@ if (do.Partition) {
 		if (!exists("runIDs")) runIDs <- readRDS(file = file.path(dir.sdm, filename.saveRunIDs))
   
 		list.export <- c("climData", "obsData", "probData", "centerMeansData", "action",
-					   "runRequests", "runRequestIDs", "baseRegion", "regions", "factors", "variables",
-					   "get_region_eval", "get.cutoff", "eval.methods", "stat.methods", "rmse", "mae",
-					   "get_temp_fname", "dir.tables")
+					   "runRequests", "runRequestIDs", "baseRegion", "regions", "factors", "variables", "eval_disc.methods", "eval_cont.methods",
+					   "get_region_eval", "calc_eval_regions", "get.cutoff", "stat.methods", "rmse", "mae",
+					   "get_temp_fname", "dir.tables", "dir.sdm")
 		if (identical(parallel_backend, "parallel")) {
 			clusterExport(cl, list.export)
 		}
@@ -376,11 +405,15 @@ if (do.Partition) {
 		for(ir in regions){
 			print(paste(Sys.time(), ": Partition of region:", ir))
 
-			#get evaluation statistics (this takes about 1.24 s per iteration)
+			#get evaluation statistics
+			#	- this takes about 1.24 s per call to get_region_eval()
+			#	- 320,000 runs of region 1 took 250 core-hours
 			ftemp1 <- file.path(dir.tables, paste0("Partition_Evals_region", ir, "_temp1.rds"))
 			if (action == "continue" && file.exists(ftemp1)) {
 				part.mat <- readRDS(file = ftemp1)
 			} else {
+				print(paste(Sys.time(), ": Partition of region:", ir, "; get evaluation statistics"))
+				
 				part.mat <- cbind(runRequests,matrix(NA,nrow=nrow(runRequests),ncol=length(variables)))
 				colnames(part.mat) <- c(colnames(runRequests),variables)
 	
@@ -393,14 +426,14 @@ if (do.Partition) {
 				} else stop("this is not implemented 1")
 		
 				temp <- t(idones)
-				temp <- temp[order(temp[, 1]), ]
-				part.mat[temp[, 1], variables] <- temp[, -1]
+				part.mat[runIDs, variables] <- temp
 
 				saveRDS(part.mat, file = ftemp1)
 			}
 	
 			#run ANOVAs to estimate partitioning of variation
 			if (identical(parallel_backend, "parallel")) {
+				print(paste(Sys.time(), ": Partition of region:", ir, "; run ANOVAs"))
 				clusterExport(cl, c("ir", "part.mat"))
 
 				part.out <- parLapply(cl, seq_along(variables), function(j) calc_region_partition(j))
@@ -466,8 +499,19 @@ if (do.Complexity) {
 		saveRDS(complexity, file = cfile)
 	}
 
-	plot_complexity(y = complexity[, "edf"], ylab = "Degrees of Freedom", fname = "Complexity_DF.png")
-	plot_complexity(y = complexity[, "comp_time_s"], ylab = "Computation time (s)", fname = "Complexity_CompTime.png")
+	plot_complexity(preds = c("models", "mlevels", "types", "errors"),
+					y = complexity[, "edf"], ylab = "Degrees of Freedom", fname = "Complexity_DF1.png")
+	plot_complexity(preds = c("models", "mlevels", "types"),
+					y = complexity[, "edf"], ylab = "Degrees of Freedom", fname = "Complexity_DF2.png")
+	plot_complexity(preds = c("models", "mlevels"),
+					y = complexity[, "edf"], ylab = "Degrees of Freedom", fname = "Complexity_DF3.png")
+	
+	plot_complexity(preds = c("models", "mlevels", "types", "errors"),
+					y = complexity[, "comp_time_s"], ylab = "Computation time (s)", fname = "Complexity_CompTime1.png")
+	plot_complexity(preds = c("models", "mlevels", "types"),
+					y = complexity[, "comp_time_s"], ylab = "Computation time (s)", fname = "Complexity_CompTime2.png")
+	plot_complexity(preds = c("models", "mlevels"),
+					y = complexity[, "comp_time_s"], ylab = "Computation time (s)", fname = "Complexity_CompTime3.png")
 
 	print(paste(Sys.time(), ": Model complexity done"))
 }
@@ -481,8 +525,9 @@ if (do.Evaluation) {
   
   if(identical(parallel_backend, "mpi")){
 	if (!exists("bres")) bres <- readRDS(file = file.path(dir.sdm, filename.saveSDMs))
-	  list.export <- c("obsData","probData","climData","centerMeansData", "baseRegion", 
-					   "eval2.SDMs", "regions", "eval.methods", "sdm.models", "rmse", "mae","get.cutoff",
+	  list.export <- c("obsData","probData","climData", "centerMeansData", "baseRegion", 
+					   "eval2.SDMs", "regions", "eval_disc.methods", "eval_cont.methods", "sdm.models", "stat.methods",
+					   "get_region_eval", "calc_eval_regions", "rmse", "mae", "get.cutoff",
 					   "dir.sdm", "dir.in", "get_temp_fname")
     exportObjects(c("work", list.export))
     mpi.bcast.cmd(lapply("Rmpi", FUN=require, character.only=TRUE))
@@ -541,10 +586,11 @@ if (do.Evaluation) {
 					}
 				} else cl
 
-		list.export <- c("eval3.SDMs", "get_temp_fname", "get.cutoff", "rsme", "mae",
+		list.export <- c("eval3.SDMs", "calc_eval_regions", "get_region_eval", "get_temp_fname", "get.cutoff", "rmse", "mae",
 						"runEvals", "runEvalIDs", "runRequests", "runRequestIDs", "runIDs",
-						"eval.methods", "quantile.probs", "regions", "baseRegion",
-						"probData", "climData", "obsData")
+						"quantile.probs", "regions", "baseRegion", "eval_disc.methods", "eval_cont.methods",
+						"probData", "climData", "obsData",
+						"dir.sdm")
 		clusterExport(cl2, list.export)
 
 		idones <- parLapply(cl2, 1:nrow(runEvals), function(i) try(eval3.SDMs(i), silent=TRUE))
@@ -596,9 +642,10 @@ if (do.EvaluationSummary) {
 	if (!exists("evalIDs")) evalIDs <- readRDS(file = file.path(dir.sdm, filename.saveEvalIDs))
   
 	#Fill evaluation arrays with values from bres
-	evalA_SDMs <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(sdm.models), length(eval.methods)+1, 2), dimnames=list(types,errors, names(mlevels), sdm.models, c(eval.methods, "Deviance"), c("mean", "sd")))
-	evalA_Proj <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(regions), length(sdm.models), length(eval.methods)+2, 2), dimnames=list(types,errors, names(mlevels), paste0("region", regions), sdm.models, c(eval.methods, "RMSE", "MAE"), c("mean", "sd")))
-	evalA_ProjDiffs <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(regions), length(sdm.models), length(eval.methods)+2, 2), dimnames=list(types,errors, names(mlevels), paste0("region", regions), sdm.models, c(eval.methods, "RMSE", "MAE"), c("mean", "sd")))
+	eval.methods <- c(eval_disc.methods, eval_cont.methods)
+	evalA_SDMs <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(sdm.models), length(eval_disc.methods)+1, 2), dimnames=list(types,errors, names(mlevels), sdm.models, c(eval_disc.methods, "Deviance"), c("mean", "sd")))
+	evalA_Proj <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(regions), length(sdm.models), length(eval.methods), 2), dimnames=list(types,errors, names(mlevels), paste0("region", regions), sdm.models, eval.methods, c("mean", "sd")))
+	evalA_ProjDiffs <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(regions), length(sdm.models), length(eval.methods), 2), dimnames=list(types,errors, names(mlevels), paste0("region", regions), sdm.models, eval.methods, c("mean", "sd")))
   
 	for(i in evalIDs){
 		bevalM <- try(readRDS(file = get_temp_fname(runEvals[i, ], runEvalIDs[i])), silent = TRUE)

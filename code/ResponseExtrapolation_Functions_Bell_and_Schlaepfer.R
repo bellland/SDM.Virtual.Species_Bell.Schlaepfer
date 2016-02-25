@@ -216,7 +216,7 @@ set_options <- function(model, level=c("linear", "squared", "interaction")){
 }
 
 #calculate cutoff based on maximizing TSS
-get.cutoff <- function(pred, obs, pred.eval, obs.eval, method){
+get.cutoff_slow <- function(pred, obs, pred.eval, obs.eval, method){
   
   p.cut <- seq(0,1,by=.001)
   stat <- list()
@@ -292,6 +292,85 @@ get.cutoff <- function(pred, obs, pred.eval, obs.eval, method){
   
 }
 
+# the new get.cutoff() is 25% faster than the older version get.cutoff_slow
+get.cutoff <- function(pred, obs, pred.eval, obs.eval, method){
+  p.cut <- seq(0,1,by=.001)
+  responses1 <- c('Testing.data', 'Evaluating.data', 'Sensitivity', 'Specificity')
+  stat <- array(NA, dim = c(length(method), length(p.cut), length(responses1)), dimnames = list(method, NULL, responses1))
+  responses2 <- c('Testing.data', 'Evaluating.data', 'Cutoff', 'Sensitivity', 'Specificity')
+  cutoff <- array(NA, dim = c(length(method), length(responses2)), dimnames = list(method, responses2))
+
+  for (pc in seq_along(p.cut)) {
+    p.obs <- as.integer(pred >= p.cut[pc])
+    lobs <- list(temp <- obs == 0, !temp)
+    lpobs <- list(temp <- p.obs == 0, !temp)
+    a <- sum(lobs[[2]] & lpobs[[2]])
+    b <- sum(lobs[[1]] & lpobs[[2]])
+    c <- sum(lobs[[2]] & lpobs[[1]])
+    d <- sum(lobs[[1]] & lpobs[[1]])
+    n <- length(obs)
+
+    p.obs.eval <- as.integer(pred.eval >= p.cut[pc])
+    lobse <- list(temp <- obs.eval == 0, !temp)
+    lpobse <- list(temp <- p.obs.eval == 0, !temp)
+    ae <- sum(lobse[[2]] & lpobse[[2]])
+    be <- sum(lobse[[1]] & lpobse[[2]])
+    ce <- sum(lobse[[2]] & lpobse[[1]])
+    de <- sum(lobse[[1]] & lpobse[[1]])
+    ne <- length(obs.eval)
+
+	sensitivity <- a / (a + c)
+	specificity <- d / (b + d)
+    
+    if('TSS' %in% method){
+      stat["TSS", pc, "Testing.data"] <-  a / (a + c) + d / (b + d) - 1		#Testing Data -- sensitivity + specificity - 1
+      stat["TSS", pc, "Evaluating.data"] <-  ae / (ae + ce) + de / (be + de) - 1	#Evaluating Data -- sensitivity + specificity - 1
+      stat["TSS", pc, "Sensitivity"] <- sensitivity
+      stat["TSS", pc, "Specificity"] <- specificity
+    }
+    
+    if('KAPPA' %in% method){
+      stat["KAPPA", pc, "Testing.data"] <-  ((a + d) / n - ((a + b) * (a + c) + (c + d) * (b + d)) / (n^2)) /
+        (1 - ((a + b) * (a + c) + (c + d) * (b + d)) / (n^2))
+      stat["KAPPA", pc, "Evaluating.data"] <-  ((ae + de) / ne - ((ae + be) * (ae + ce) + (ce + de) * (be + de)) / (ne^2)) /
+        (1 - ((ae + be) * (ae + ce) + (ce + de) * (be + de)) / (ne^2))
+      stat["KAPPA", pc, "Sensitivity"] <- sensitivity
+      stat["KAPPA", pc, "Specificity"] <- specificity
+    }
+    
+    if('ROC' %in% method){
+      stat["ROC", pc, "Testing.data"] <-  sensitivity
+      stat["ROC", pc, "Evaluating.data"] <-  specificity
+      stat["ROC", pc, "Sensitivity"] <-  ae / (ae + ce)
+      stat["ROC", pc, "Specificity"] <-  de / (be + de)
+    }
+  }
+
+
+  if ('TSS' %in% method) {
+  	imax <- which.max(stat["TSS", , 'Testing.data'])
+  	cutoff['TSS', responses1] <- stat["TSS", imax, responses1]
+  	cutoff['TSS', 'Cutoff'] <- p.cut[imax]
+  }
+  if ('KAPPA' %in% method) {
+  	imax <- which.max(stat["KAPPA", , "Testing.data"])
+  	cutoff['KAPPA', responses1] <- stat["KAPPA", imax, responses1]
+  	cutoff['KAPPA', 'Cutoff'] <- p.cut[imax]
+  }
+  if ('ROC' %in% method) {
+  	ROCsorted <- stat["ROC", order(stat["ROC", , "Evaluating.data"]), ]
+  	cutoff['ROC', "Testing.data"] <- sum(ROCsorted[-1, "Evaluating.data"] * diff(1 - ROCsorted[, "Testing.data"]), na.rm = TRUE)
+  	cutoff['ROC', "Evaluating.data"] <- sum(ROCsorted[-1, "Specificity"] * diff(1 - ROCsorted[, "Sensitivity"]), na.rm = TRUE)
+	imax <- which.min(abs(stat["ROC", , "Testing.data"] - stat["ROC", , "Evaluating.data"]))
+  	cutoff['ROC', 'Cutoff'] <- p.cut[imax]
+	cutoff['ROC', "Sensitivity"] <- stat["ROC", imax, "Testing.data"]
+	cutoff['ROC', "Specificity"] <- stat["ROC", imax, "Evaluating.data"]
+  }
+  
+  cutoff
+}
+
+
 
 make_prediction <- function(bsdm, newData) {
 	if (inherits(bsdm, "glm") || inherits(bsdm, "gam")) { #gam objects inherit from classes glm and lm
@@ -315,7 +394,7 @@ make_prediction <- function(bsdm, newData) {
 
 
 #fit model, get cutoff, and evaluation statistics
-calc_sdms <- function(type, error, model, bdat, bopt, eval.methods){
+calc_sdms <- function(type, error, model, bdat, bopt, eval_disc.methods){
   type <<- type	 #Need to pass 'type' because of model formulae
   error <<- error
   data.tmp <- cbind(bdat$resp.var,bdat$expl.var)
@@ -423,7 +502,7 @@ calc_sdms <- function(type, error, model, bdat, bopt, eval.methods){
   ##evaluate models and get cutoffs
   bsdms$cutoff <- get.cutoff(pred = pred.obs, obs = data.tmp[,1],
                              pred.eval = pred.eval, obs.eval = eval.tmp[,1],
-                             method = eval.methods)	
+                             method = eval_disc.methods)	
   
   ##return list
   bsdms
@@ -495,7 +574,7 @@ make.SDM <- function(i){
 
 		bopt <- set_options(model = model, level=  mlevels[[mlevel]])
 
-		bresM$SDMs <- calc_sdms(type = type, error = error, model = model, bdat = bdat, bopt = bopt, eval.methods = eval.methods) 
+		bresM$SDMs <- calc_sdms(type = type, error = error, model = model, bdat = bdat, bopt = bopt, eval_disc.methods = eval_disc.methods) 
 
 		#Project model onto all regions and for response curve plots
 		bresM$Proj <- bresM$ResponseCurvePreds <- vector(mode="list", length=length(regions))
@@ -561,30 +640,60 @@ make.SDM <- function(i){
 rmse <- function(obs, pred, na.rm=FALSE) sqrt(mean((obs - pred) ^ 2, na.rm=na.rm))
 mae <- function(obs, pred, na.rm=FALSE) mean(abs(obs - pred), na.rm=na.rm)
 
-get_region_eval <- function(i) {
-	res <- matrix(NA, nrow = 1, ncol = 1 + length(variables), dimnames = list(NULL, c("runID", variables)))
-	res[, "runID"] <- i
+
+calc_eval_regions <- function(i) {
+	stat.methods <- c("Testing.data", "Evaluating.data", "Cutoff", "Sensitivity", "Specificity")
 	
-	prob <- probData[[paste(runRequests[i,'types'],runRequests[i,'errors'],sep="_")]][climData[,'region'] == ir]
-	obs  <- obsData[[paste(runRequests[i,'types'],runRequests[i,'errors'],sep="_")]][, runRequests[i,'realizations']][climData[,'region'] == ir]
+	res <- list(discrete = array(NA, dim = c(length(regions), length(eval_disc.methods), length(stat.methods)), dimnames = list(regions, eval_disc.methods, stat.methods)),
+				cont = array(NA, dim = c(length(regions), length(eval_cont.methods)), dimnames = list(regions, eval_cont.methods)))
 
-  	bresM <- try(readRDS(file = get_temp_fname(runRequests[i, ], runRequestIDs[i])), silent = TRUE)
-	if (!inherits(bresM, "try-error")) {
-		pred <- bresM$Proj[[ir]]$Proj$pred/1000
+  	ftemp <- get_temp_fname(runRequests[i, ], runRequestIDs[i])
+  	if (!file.exists(ftemp)) {
+  		return(res)
+  	} else {
+  		bresM <- try(readRDS(file = ftemp), silent = TRUE)
+		
+		if (!inherits(bresM, "try-error") && !is.null(bresM$evals)) {
+			return(bresM$evals)
+		} else {
+			for (ir in seq_along(regions)) {
+				obs  <- obsData[[paste(runRequests[i,'types'], runRequests[i,'errors'], sep="_")]][, runRequests[i,'realizations']][climData[,'region'] == ir]
+				pred <- bresM$Proj[[ir]]$Proj$pred / 1000
 
-		cutoff <- get.cutoff(pred = pred,
-						   obs = obs,
-						   pred.eval = pred,
-						   obs.eval = obs,
-						   method = eval.methods)[,stat.methods]
+				res[["discrete"]][ir, eval_disc.methods, stat.methods] <- get.cutoff(pred = pred, obs = obs,
+																					   pred.eval = pred, obs.eval = obs,
+																					   method = eval_disc.methods)
 
-		if('TSS' %in% variables) res[, 'TSS'] <- cutoff['TSS']
-		if('ROC' %in% variables) res[, 'ROC'] <- cutoff['ROC']
-		if('KAPPA' %in% variables) res[, 'KAPPA'] <- cutoff['KAPPA']
-		if('RMSE' %in% variables) res[, 'RMSE'] <- rmse(obs=prob, pred=pred)
-		if('MAE' %in% variables) res[, 'MAE'] <- mae(obs=prob, pred=pred)
+				prob <- probData[[paste(runRequests[i,'types'], runRequests[i,'errors'], sep="_")]][climData[,'region'] == ir]
+				res[["cont"]][ir, 'RMSE'] <- rmse(obs = prob, pred = pred)
+				res[["cont"]][ir, 'MAE'] <- mae(obs = prob, pred = pred)
+			}
+
+			bresM$evals <- res
+			saveRDS(bresM, file = ftemp)
+			print(paste(Sys.time(), i, runRequestIDs[i], ": evaluation for each region saved to disk"))
+		}
 	}
 	
+	res
+}
+
+
+get_region_eval <- function(i) {
+	outs <- c(eval_disc.methods, eval_cont.methods)
+	res <- matrix(NA, nrow = length(stat.methods), ncol = length(outs), dimnames = list(stat.methods, outs))
+
+  	ftemp <- get_temp_fname(runRequests[i, ], runRequestIDs[i])
+  	if (file.exists(ftemp)) {
+  		bresM <- try(readRDS(file = ftemp), silent = TRUE)
+
+		if (!inherits(bresM, "try-error")) {
+			temp <- if (is.null(bresM$evals)) calc_eval_regions(i) else bresM$evals
+			res[, eval_disc.methods] <- t(temp[["discrete"]][ir, eval_disc.methods, stat.methods])
+			res[, eval_cont.methods] <- rep(temp[["cont"]][ir, eval_cont.methods], each = length(stat.methods))
+		}
+	}
+		
 	res
 }
 
@@ -599,8 +708,9 @@ calc_region_partition <- function(j) {
 		colnames(tmp) <- c('y',colnames(runRequests))
 
 		tmp$realizations <- apply(tmp[,factors],1,paste,collapse=".")
-
-		mfit <- aov(y ~ factor(types)*factor(errors)*factor(models)*factor(mlevels) + Error(realizations),data=tmp) 
+		
+		# with 320,000 cases, this uses about 31 GB of memory
+		mfit <- aov(y ~ factor(types)*factor(errors)*factor(models)*factor(mlevels) + Error(realizations), data=tmp) 
 		sfit <- summary(mfit)
 
 		if (length(sfit) == 2) {
@@ -627,108 +737,6 @@ calc_region_partition <- function(j) {
 }
 
 
-eval2.SDMs <- function(i, runEval, type, error, mlevel, model, runID, bsub){
-	ftemp <- get_temp_fname(runEvals[i, ], runEvalIDs[i])
-	if (!file.exists(ftemp)) {
-		if (length(bsub) == 0) stop("bsub does not contain data")
-		
-		print(paste(Sys.time(), "eval2.SDMs:", i, paste(runEval[i, ], collapse = "-")))
-
-		ids <- matrix(unlist(t(sapply(bsub, FUN=function(l) l$runID))[, c("realizations", "run")]), ncol=2, byrow=FALSE, dimnames=list(NULL, c("realizations", "run")))
-
-		quantile.probs <- c(0.025, 0.05, 0.25, 0.5, 0.75, 0.95, 0.975)
-
-		#Prepare result container
-		bevalM <- vector(mode="list", length=4)
-		names(bevalM) <- c("evalID", "Eval", "Deviance", "Proj") #removed variable importance for now
-		bevalM$evalID <- runEval
-
-		#Evaluate models based on evaluation datasplits and realizations
-		stat.methods <- c('Testing.data','Evaluating.data','Cutoff','Sensitivity','Specificity')
-		temp.Eval <- array(NA,dim=c(length(eval.methods), length(stat.methods), temp <- apply(ids, 2, max)),
-						 dimnames=list(eval.methods, stat.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
-		temp.Dev <- array(NA, dim=temp)
-
-		warning("TODO(drs): get deviance(-replacement) for new methods")
-		for(j in 1:nrow(ids)){
-			temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- bsub[[j]]$SDMs$cutoff[,stat.methods]
-			temp.Dev[ids[j, "realizations"], ids[j, "run"]] <- bsub[[j]]$SDMs$DEV
-		}
-
-		bevalM$Eval$mean <- apply(temp.Eval, MARGIN=c(1,2), FUN=mean, na.rm=TRUE)
-		bevalM$Eval$sd   <- apply(temp.Eval, MARGIN=c(1,2), FUN=sd, na.rm=TRUE)
-		bevalM$Eval$quantiles   <- apply(temp.Eval, MARGIN=c(1,2),FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
-		bevalM$Deviance <- c(mean=mean(temp.Dev, na.rm=TRUE), sd=sd(temp.Dev, na.rm=TRUE))
-		bevalM$Deviance$quantiles <- quantile(temp.Dev, probs=quantile.probs, type=8, na.rm=TRUE)
-
-		#Project models onto all regions and take differences between projected and base region
-		bevalM$Proj <- vector(mode="list", length=length(regions))
-		stat.methods <- c("Testing.data", "Cutoff", "Sensitivity", "Specificity")
-
-warning("TODO(drs): add code to measure degree of extrapolation")
-if (FALSE) {
-# based on ExDet by Mesgaran, M.B., Cousens, R.D. & Webber, B.L. (2014) Here be dragons: a tool for quantifying novelty due to covariate range and correlation change when projecting species distribution models. Diversity & Distributions, 20: 1147–1159, DOI: 10.1111/ddi.12209
-# but their tool is standalone, instead use modified code from https://pvanb.wordpress.com/2014/05/13/a-new-method-and-tool-exdet-to-evaluate-novelty-environmental-conditions/
-# calculate NT2:
-
-}
-
-		for(ir in c(baseRegion, seq_along(regions)[-baseRegion])){
-			temp.Eval <- array(NA,dim=c(length(eval.methods), length(stat.methods), temp <- apply(ids, 2, max)),
-							   dimnames=list(eval.methods, stat.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
-			temp.Prob <- array(NA,dim=c(2, temp),
-							   dimnames=list(c('rmse','mae'), eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
-
-			#Evaluate projections based on complete dataset
-			data.probs <- probData[[paste(type,error,sep="_")]][(climData[, "region"] == regions[ir])]
-
-			for(j in 1:nrow(ids)){
-			  data.obs <- obsData[[paste(type,error,sep="_")]][(climData[, "region"] == regions[ir]), ids[j, "realizations"]]
-			  FittedData <- bsub[[j]]$Proj[[ir]]$Proj$pred/1000
-			  temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- 
-				get.cutoff(pred = FittedData,
-						   obs = data.obs,
-						   pred.eval = FittedData,
-						   obs.eval = data.obs,
-						   method = eval.methods)[,stat.methods]
-
-			  temp.Prob['rmse', ids[j, "realizations"], ids[j, "run"]] <- rmse(obs=data.probs, pred = FittedData)
-			  temp.Prob['mae', ids[j, "realizations"], ids[j, "run"]]  <- mae(obs=data.probs, pred = FittedData)
-
-			}
-
-			#Differences to base region
-			if(ir == baseRegion){#Code assumes that ir takes as first value the value of base region
-			  base.Eval <- temp.Eval
-			  base.Prob <- temp.Prob
-			}
-			diff.Eval <- temp.Eval - base.Eval
-			diff.Prob <- temp.Prob - base.Prob
-
-			#Aggregated evaluations
-			bevalM$Proj[[ir]]$Eval$mean <- apply(temp.Eval, MARGIN=c(1, 2), FUN=mean, na.rm=TRUE)
-			bevalM$Proj[[ir]]$Eval$sd   <- apply(temp.Eval, MARGIN=c(1, 2), FUN=sd, na.rm=TRUE)
-			bevalM$Proj[[ir]]$Eval$quantiles <- apply(temp.Eval, MARGIN=c(1, 2), FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
-			bevalM$Proj[[ir]]$EvalDiffToBase$mean <- apply(diff.Eval, MARGIN=c(1, 2), FUN=mean, na.rm=TRUE)
-			bevalM$Proj[[ir]]$EvalDiffToBase$sd   <- apply(diff.Eval, MARGIN=c(1, 2), FUN=sd, na.rm=TRUE)
-			bevalM$Proj[[ir]]$EvalDiffToBase$quantiles <- apply(diff.Eval, MARGIN=c(1, 2), FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
-
-			#Evaluate projections against underlying probabilities
-			bevalM$Proj[[ir]]$EvalProb$mean <- apply(temp.Prob, MARGIN=1, FUN=mean, na.rm=TRUE)
-			bevalM$Proj[[ir]]$EvalProb$sd <- apply(temp.Prob, MARGIN=1, FUN=sd, na.rm=TRUE)
-			bevalM$Proj[[ir]]$EvalProb$quantiles <- apply(temp.Prob, MARGIN=1, FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
-			bevalM$Proj[[ir]]$EvalProbDiffToBase$mean <- apply(diff.Prob, MARGIN=1, FUN=mean, na.rm=TRUE)
-			bevalM$Proj[[ir]]$EvalProbDiffToBase$sd <- apply(diff.Prob, MARGIN=1, FUN=sd, na.rm=TRUE)
-			bevalM$Proj[[ir]]$EvalProbDiffToBase$quantiles <- apply(diff.Prob, MARGIN=1, FUN=quantile, probs=quantile.probs, type=8, na.rm=TRUE)
-		}
-	
-		
-		writeRDS(bevalM, file = ftemp)
-	}
-  	
-	i
-}
-
 eval3.SDMs <- function(i){
 	ftemp <- get_temp_fname(runEvals[i, ], runEvalIDs[i])
 	if (!file.exists(ftemp)) {
@@ -752,13 +760,13 @@ eval3.SDMs <- function(i){
 		bevalM$evalID <- runEvals[i, ]
 
 		#Evaluate models based on evaluation datasplits and realizations
-		stat.methods <- c('Testing.data','Evaluating.data','Cutoff','Sensitivity','Specificity')
-		temp.Eval <- array(NA,dim=c(length(eval.methods), length(stat.methods), temp <- apply(ids, 2, max)),
-						 dimnames=list(eval.methods, stat.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
+		stat.methods <- c('Testing.data', 'Evaluating.data', 'Cutoff', 'Sensitivity', 'Specificity')
+		temp.Eval <- array(NA,dim=c(length(eval_disc.methods), length(stat.methods), temp <- apply(ids, 2, max)),
+						 dimnames=list(eval_disc.methods, stat.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
 		temp.Dev <- array(NA, dim=temp)
 
 		for (j in 1:nrow(ids)){
-			temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- bsub[[j]]$SDMs$cutoff[,stat.methods]
+			temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- bsub[[j]]$SDMs$cutoff[eval_disc.methods, stat.methods]
 			temp <- bsub[[j]]$SDMs$DEV
 			temp.Dev[ids[j, "realizations"], ids[j, "run"]] <- if (is.null(temp)) NA else temp
 		}
@@ -775,28 +783,18 @@ eval3.SDMs <- function(i){
 		stat.methods <- c("Testing.data", "Cutoff", "Sensitivity", "Specificity")
 
 		for(ir in c(baseRegion, seq_along(regions)[-baseRegion])){
-			temp.Eval <- array(NA,dim=c(length(eval.methods), length(stat.methods), temp <- apply(ids, 2, max)),
-							   dimnames=list(eval.methods, stat.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
-			temp.Prob <- array(NA,dim=c(2, temp),
-							   dimnames=list(c('rmse','mae'), eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
+			temp.Eval <- array(NA,dim=c(length(eval_disc.methods), length(stat.methods), temp <- apply(ids, 2, max)),
+							   dimnames=list(eval_disc.methods, stat.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
+			temp.Prob <- array(NA,dim=c(length(eval_cont.methods), temp),
+							   dimnames=list(eval_cont.methods, eval(parse(text=paste(names(temp)[1], "=1:", temp[1]))), eval(parse(text=paste(names(temp)[2], "=1:", temp[2])))))
 
 			#Evaluate projections based on complete dataset
-			data.probs <- probData[[paste(type,error,sep="_")]][(climData[, "region"] == regions[ir])]
-
-			for(j in 1:nrow(ids)){
-			  data.obs <- obsData[[paste(type,error,sep="_")]][(climData[, "region"] == regions[ir]), ids[j, "realizations"]]
-			  FittedData <- bsub[[j]]$Proj[[ir]]$Proj$pred/1000
-			  temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- 
-				get.cutoff(pred = FittedData,
-						   obs = data.obs,
-						   pred.eval = FittedData,
-						   obs.eval = data.obs,
-						   method = eval.methods)[,stat.methods]
-
-			  temp.Prob['rmse', ids[j, "realizations"], ids[j, "run"]] <- rmse(obs=data.probs, pred = FittedData)
-			  temp.Prob['mae', ids[j, "realizations"], ids[j, "run"]]  <- mae(obs=data.probs, pred = FittedData)
-
+			for (j in 1:nrow(ids)) {
+			  etemp <- get_region_eval(xt[j])
+			  temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- t(etemp[, eval_disc.methods])
+			  temp.Prob[, ids[j, "realizations"], ids[j, "run"]] <- etemp[1, eval_cont.methods]
 			}
+
 
 			#Differences to base region
 			if(ir == baseRegion){#Code assumes that ir takes as first value the value of base region
@@ -851,12 +849,31 @@ get_complexity <- function(i) {
 	res
 }
 
-plot_complexity <- function(y, ylab, fname) {
-	png(file.path(dir.figs,fname),width=10,height=7,units="in",res=600)
-	op <- par(mar=c(12,4,1,1))
-	tmp <- boxplot(y ~ apply(runRequests[, colnames(runEvals)],1,paste,collapse="_"),axes=FALSE,frame.plot=TRUE)
+plot_complexity <- function(preds = NULL, y, ylab, fname) {
+	dir.create(dir_temp <- file.path(dir.figs, "Complexity"), showWarnings = FALSE)
+	ftemp <- file.path(dir_temp, fname)
+	
+	if (is.null(preds)) preds <- colnames(runEvals)
+	ylim <- c(0, max(y, na.rm = TRUE))
+	cats <- unique(runRequests[, preds])
+	ncats <- nrow(cats)
+	
+	# determine figure and axis label size
+	pwidth <- max(5, 10 / 40 * ncats)
+	pheight_target <- 7
+	png(file = ftemp, width = pwidth, height = pheight_target, units="in", res=600)
+	xcex <- 0.85
+	nchar_xlab <- max(strwidth(apply(cats, 1, paste, collapse = "_"), units = "inches", cex = xcex))
+	pheight_ratio <- min(6, max(3, pheight_target / nchar_xlab))
+	pheight <- round(nchar_xlab * pheight_ratio * 2) / 2
+	dev.off()
+	
+	# plot
+	png(file = ftemp, width = pwidth, height = pheight, units="in", res=600)
+	op <- par(mar = c(0.5 + ceiling(nchar_xlab / par("cin")[2]), 4, 1, 1))
+	tmp <- boxplot(y ~ apply(runRequests[, preds],1,paste,collapse="_"), ylim = ylim, axes=FALSE,frame.plot=TRUE)
 	axis(2)
-	axis(1,at = 1:length(tmp$names), labels = tmp$names,las=3,cex.axis=.85)
+	axis(1,at = 1:length(tmp$names), labels = tmp$names,las=3, cex.axis = xcex)
 	mtext(ylab,side=2,line=2.5)
 	par(op)
 	dev.off()
