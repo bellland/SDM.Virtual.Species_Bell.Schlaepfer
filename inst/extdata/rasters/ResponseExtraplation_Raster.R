@@ -40,3 +40,9 @@ for (i in regions) writeRaster(aggregate(r[[i]], fact = 8), filename = file.path
 writeRaster(aggregate(rall, fact = 8), filename = file.path(dir_grid, "res_1to4_degree", "extent.raster.r.all.grd"), datatype = "INT1S")
 
 
+
+#---Region borders as polygons
+allborders <- rasterToPolygons(rall, dissolve = TRUE)
+
+saveRDS(allborders, file.path(dir_grid, "res_1to32_degree", "extent.borders.rds"))
+
