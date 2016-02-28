@@ -14,11 +14,12 @@ action <- "continue" # "new", restart all computations; "continue", attempts acc
 do.ExampleForDropbox <- FALSE #set this to TRUE to access/write to 'Example' subset on dropbox
 
 do.SDMs <- FALSE					# '20160223' with 320,000 runs: 2016/02/24 completed in 237 core-hours
-do.RegionEvals <- TRUE				# 
-do.Partition <- FALSE				
+do.RegionEvals <- FALSE				# '20160226' with 320,000 runs: 2016/02/26 completed in 482 core-hours
+do.Partition <- TRUE				
 do.Complexity <- FALSE				# '20160223' with 320,000 runs: 2016/02/25 completed in 1.5 core-hours
-do.Evaluation <- TRUE
-do.EvaluationSummary <- TRUE
+do.Evaluation <- FALSE				# '20160226' with 320,000 runs: 2016/02/26 completed in 2.2 core-hours
+do.EvaluationSummary <- FALSE
+do.Extrapolation <- FALSE
 do.Figures <- FALSE
 
 ##
@@ -34,7 +35,7 @@ computer <- "Daniel" # "Dave"
 
 if (computer == "Dave") {
 	dir.prj <- "E:/Work_Share_Dave_SDM&ResponseCurves"
-	path.functions <-"E:/Dropbox/Work_Share_Dave_SDM&ResponseCurves/BIOMOD2" 
+	path.functions <-"E:/Dropbox/Work_Share_Dave_SDM&ResponseCurves/BIOMOD2"
 	dir.big <- dir.prj
 } else if (computer == "Daniel") {
 	dir.prj <- "~/Dropbox/Work_Stuff/2_Research/200907_UofWyoming_PostDoc/Product21_SDM_AsymmetryResponseCurve/3_Simulations"
@@ -97,12 +98,14 @@ presenceRealizationsN <- switch(EXPR=paste0("v_", date.run),
                                 v_20150130=25,
                                 v_20160209=4,
                             	v_20160223=40)
+repeatsN_partition_subsample <- 10
 predictorsN <- 10
 equalSamples <- FALSE #if TRUE, ensures that subsamples have the same number of presences as absences
 
 
 ## Define set of SDM runs
-if (action == "continue" && file.exists(ftemp <- file.path(dir.res, filename.runRequests))) {
+ftemp <- file.path(dir.res, filename.runRequests)
+if (action == "continue" && file.exists(ftemp)) {
 	load(file = ftemp) #runRequests, runRequestIDs, runEvals, runEvalIDs
 } else {
 	if (do.ExampleForDropbox) {
@@ -132,7 +135,7 @@ print(sessionInfo())
 
 ####### Set up parallel environment
 #if(!interactive()){
-num_cores <- min(num_cores, parallel::detectCores() - 2)
+num_cores <- min(num_cores, parallel::detectCores() - 1)
 
 if(identical(parallel_backend, "mpi")){
   stopifnot(require("Rmpi"))
@@ -182,7 +185,7 @@ if(identical(parallel_backend, "mpi")){
 
 ####### Functions
 
-source(file.path(path.functions, "ResponseExtrapolation_Functions_Bell_and_Schlaepfer.R"))
+source(file.path(path.functions, "ResponseExtrapolation_Functions_Bell_and_Schlaepfer.R"), keep.source = FALSE)
 
 ################
 ## Read data from files once and generate observations
@@ -190,7 +193,6 @@ ftemp <- file.path(dir.res, filename.saveTypeData)
 if (action == "continue" && file.exists(ftemp)) {
   print(paste(Sys.time(), ": Loading generated data"))
   load(ftemp)
-  
 } else {
   print(paste(Sys.time(), ": Data generation started"))
 
@@ -251,7 +253,7 @@ if (do.SDMs) {
   list.export <- c("libraries", "climData", "obsData", "probData", "centerMeansData", 
                    "runRequests", "runRequestIDs", "baseRegion", "regions", "mlevels", "sdm.models", 
                    "eval_disc.methods", "predictorsN", "make.SDM", "set_Data", "calc_sdms", 
-                   "set_options", "make_prediction", "make_projection","dir.sdm", "dir.in","equalSamples",
+                   "set_options", "make_prediction", "make_projection","dir.sdm", "dir.in", "equalSamples",
                    "get.balanced.sample","get.cutoff", "our.response.plot2", "get_temp_fname")
 
 	# determine which SDMs have already been calculated and stored to disk
@@ -383,7 +385,6 @@ if (do.RegionEvals) {
 if (do.Partition) {
 	print(paste(Sys.time(), ": Partition started"))
   
-	stat.methods <- 'Testing.data'
 	variables <- c(eval_disc.methods, eval_cont.methods)
 	factors <- c('types',"errors",'models','mlevels','realizations')
 	
@@ -395,64 +396,95 @@ if (do.Partition) {
   
 		list.export <- c("climData", "obsData", "probData", "centerMeansData", "action",
 					   "runRequests", "runRequestIDs", "baseRegion", "regions", "factors", "variables", "eval_disc.methods", "eval_cont.methods",
-					   "get_region_eval", "calc_eval_regions", "get.cutoff", "stat.methods", "rmse", "mae",
+					   "calc_region_partition2", "get_region_eval", "calc_eval_regions", "get.cutoff", "rmse", "mae",
+					   "repeatsN_partition_subsample", "evaluationRepeatsN", "presenceRealizationsN",
 					   "get_temp_fname", "dir.tables", "dir.sdm")
 		if (identical(parallel_backend, "parallel")) {
 			clusterExport(cl, list.export)
 		}
   
-		part.region <- list()	
+		part.region <- part.mat <- list()	
 		for(ir in regions){
-			print(paste(Sys.time(), ": Partition of region:", ir))
+			print(paste(Sys.time(), ": Evaluation of region:", ir))
 
 			#get evaluation statistics
 			#	- this takes about 1.24 s per call to get_region_eval()
 			#	- 320,000 runs of region 1 took 250 core-hours
-			ftemp1 <- file.path(dir.tables, paste0("Partition_Evals_region", ir, "_temp1.rds"))
+			ftemp1 <- file.path(dir.tables, "Partition", paste0("Partition_Evals_region", ir, "_temp1.rds"))
 			if (action == "continue" && file.exists(ftemp1)) {
-				part.mat <- readRDS(file = ftemp1)
+				part.mat[[ir]] <- readRDS(file = ftemp1)
 			} else {
 				print(paste(Sys.time(), ": Partition of region:", ir, "; get evaluation statistics"))
 				
-				part.mat <- cbind(runRequests,matrix(NA,nrow=nrow(runRequests),ncol=length(variables)))
-				colnames(part.mat) <- c(colnames(runRequests),variables)
+				part.mat[[ir]] <- cbind(runRequests,matrix(NA,nrow=nrow(runRequests),ncol=length(variables)))
+				colnames(part.mat[[ir]]) <- c(colnames(runRequests),variables)
 	
 				if (identical(parallel_backend, "parallel")) {
 					clusterExport(cl, "ir")
 
-					idones <- parSapply(cl, runIDs, function(i) get_region_eval(i), USE.NAMES = FALSE)
-
+					idones <- parSapply(cl, runIDs, function(i) get_region_eval(i, ir = ir, stat.methods = 'Testing.data'), USE.NAMES = FALSE)
+warnings()
 					clusterEvalQ(cl, gc())
 				} else stop("this is not implemented 1")
 		
 				temp <- t(idones)
-				part.mat[runIDs, variables] <- temp
+				part.mat[[ir]][runIDs, variables] <- temp
 
-				saveRDS(part.mat, file = ftemp1)
+				saveRDS(part.mat[[ir]], file = ftemp1)
 			}
-	
+		}
+		
+		nvar <- length(variables)
+		if (identical(parallel_backend, "parallel")) {
+			if (num_cores > nvar) {
+				cl2 <- if (.Platform$OS.type == "unix") {
+							makeCluster(nvar, type = "FORK", outfile = "log_sdm.txt")
+						} else if (.Platform$OS.type == "windows") {
+							makeCluster(nvar, type = "PSOCK", outfile = "log_sdm.txt")
+						} else {
+							stop("Running this code on this type of platform is currently not implemented.")
+						}
+				clusterExport(cl2, list.export)
+			} else {
+				cl2 <- cl
+			}
+		}
+
+		for(ir in regions){
+			print(paste(Sys.time(), ": Partition of region:", ir))
+			
+			mdata <- part.mat[[ir]]
 			#run ANOVAs to estimate partitioning of variation
 			if (identical(parallel_backend, "parallel")) {
 				print(paste(Sys.time(), ": Partition of region:", ir, "; run ANOVAs"))
-				clusterExport(cl, c("ir", "part.mat"))
+				clusterExport(cl2, c("mdata", "ir"))
 
-				part.out <- parLapply(cl, seq_along(variables), function(j) calc_region_partition(j))
-
-				clusterEvalQ(cl, gc())
+				part.out <- parLapply(cl2, seq_along(variables), function(j) calc_region_partition2(j, ir))
+warnings()
+				clusterEvalQ(cl2, gc())
 			} else stop("this is not implemented 1")
 		
+save(part.out, ir, file = file.path(dir.prj, paste0("part_region", ir, ".RData")))
 			names(part.out) <- variables
-			part.region[[ir]]<- part.out
+			part.region[[ir]] <- part.out
+
+save(part.region, ir, file = file.path(dir.prj, "part_region.RData"))
+print(paste(Sys.time(), "loop2 region", ir))
 		}
   
 		saveRDS(part.region, file = pfile)
 
-		if (identical(parallel_backend, "parallel")) {
-			clusterEvalQ(cl, rm(list=ls()))
-			clusterEvalQ(cl, gc())
+		if (num_cores > nvar) {
+			stopCluster(cl2)
+		} else {
+			clusterEvalQ(cl2, rm(list=ls()))
+			clusterEvalQ(cl2, gc())
 		}
 	}
-  
+print(paste(Sys.time(), "here done"))
+stop()
+
+  	fnames <- dimnames(part.region[[1]])[2]
 	var.sort <- c(2:(length(fnames)-1),1,length(fnames))
 	reg.sort <- c(2,1,3,4)
   
@@ -517,6 +549,42 @@ if (do.Complexity) {
 }
 
 
+##Estimate degree of extrapolation when predicting into other regions
+if (do.Extrapolation) {
+	print(paste(Sys.time(), ": Extrapolation estimation started"))
+
+	libraries <- c("raster", "rgeos", "matrixStats")
+	temp <- lapply(libraries, FUN=require, character.only=TRUE)
+
+	# Environmental data
+	env_dat <- climData
+
+	vars <- c("LnP", "MinT")
+	refdat <- as.matrix(env_dat[env_dat[, "region"] == baseRegion, vars])
+	prodat <- as.matrix(env_dat[!(env_dat[, "region"] == baseRegion), vars])
+	proxy <- as.matrix(env_dat[!(env_dat[, "region"] == baseRegion), c("x", "y")])
+
+	# GIS data
+	rall <- raster(file.path(dir.gis, "res_1to4_degree", "extent.raster.r.all.grd"))
+	NAvalue(rall) <- 0
+	rbaseRegion <- raster(file.path(dir.gis, "res_1to4_degree", paste0("extent.raster.r", baseRegion, ".grd")))
+	NAvalue(rbaseRegion) <- 0
+
+	allborders <- readRDS(file.path(dir.gis, "res_1to32_degree", "extent.borders.rds"))
+
+	# Extrapolation measures
+	NT1 <- calc_NT1(refdat, prodat)
+	NT2 <- calc_NT2(refdat, prodat)
+	
+	# Create the raster layer NT1
+	NT1rast <- rasterize(x = proxy, y = rall, field = NT1)
+	NT2rast <- rasterize(x = proxy, y = rall, field = NT2)
+
+	# Plot the raster layers
+	plot_extrapolation(NT1rast, NT2rast, file = file.path(dir.figs, "Extrapolation.png"))
+	
+}
+
 ## Evaluate SDMs
 if (do.Evaluation) {
   print(paste(Sys.time(), ": Evaluation started"))
@@ -526,7 +594,7 @@ if (do.Evaluation) {
   if(identical(parallel_backend, "mpi")){
 	if (!exists("bres")) bres <- readRDS(file = file.path(dir.sdm, filename.saveSDMs))
 	  list.export <- c("obsData","probData","climData", "centerMeansData", "baseRegion", 
-					   "eval2.SDMs", "regions", "eval_disc.methods", "eval_cont.methods", "sdm.models", "stat.methods",
+					   "eval2.SDMs", "regions", "eval_disc.methods", "eval_cont.methods", "sdm.models",
 					   "get_region_eval", "calc_eval_regions", "rmse", "mae", "get.cutoff",
 					   "dir.sdm", "dir.in", "get_temp_fname")
     exportObjects(c("work", list.export))
@@ -594,6 +662,7 @@ if (do.Evaluation) {
 		clusterExport(cl2, list.export)
 
 		idones <- parLapply(cl2, 1:nrow(runEvals), function(i) try(eval3.SDMs(i), silent=TRUE))
+warnings()
 		
 		if (num_cores > 8) {
 			stopCluster(cl2)

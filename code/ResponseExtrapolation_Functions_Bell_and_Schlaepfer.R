@@ -16,21 +16,21 @@ logit <- function(x) log(x / (1 - x))
 inv.logit <- function(x) (1 + exp(-x))^-1
 
 #inverse of rho matrix
-inv.rmat <- function(n,rho=0.9){
+inv.rmat <- compiler::cmpfun(function(n,rho=0.9){
   rinv <- diag((1 + rho^2),n,n)
   rinv[1,1] <- 1
   rinv[n,n] <- 1
   rinv[row(rinv) == (col(rinv)-1)] <- -rho
   rinv[row(rinv) == (col(rinv)+1)] <- -rho
   return(rinv)
-}  	
+})  	
 
 #calculate R from covariance matrix
-rmat  <- function(n, rho = 0.9) {
+rmat  <- compiler::cmpfun(function(n, rho = 0.9) {
   mat <- diag(rep(1,n))
   mat <- rho^abs(row(mat)-col(mat))
   ((1 - rho^2)^-1)*mat
-}
+})
 
 
 get_temp_fname <- function(x, base) {
@@ -40,7 +40,7 @@ get_temp_fname <- function(x, base) {
 
 
 ## Functions to read specimen data
-calc_ObservationsFromProbabilities <- function(probs, N, VAR, sigma,w){###need to incorporate long and Lat
+calc_ObservationsFromProbabilities <- compiler::cmpfun(function(probs, N, VAR, sigma,w){###need to incorporate long and Lat
   obs <- NULL
   
   #no residual variance, just a straight binomial draw
@@ -65,10 +65,10 @@ calc_ObservationsFromProbabilities <- function(probs, N, VAR, sigma,w){###need t
   }
   
   return(obs=obs)
-}
+})
 
 
-get_TypeData_FromFile <- function(type, center=TRUE, centerBasedOnRegionIDs=2){
+get_TypeData_FromFile <- compiler::cmpfun(function(type, center=TRUE, centerBasedOnRegionIDs=2){
   dat <- read.csv(file=file.path(dir.in, paste0(type, ".csv")))
   dat <- dat[, c("region", "x", "y", "LnP", "MinT", "prob")]
   
@@ -80,13 +80,13 @@ get_TypeData_FromFile <- function(type, center=TRUE, centerBasedOnRegionIDs=2){
   }
   
   return(list(dat=dat, centerMeans=centerMeans))
-}
+})
 
 get_GeographicRaster_FromFile <- function(region){
   raster(file.path(dir.gis, paste0("extent.raster.r", region, ".grd")))
 }
 
-set_Data <- function(type, error, obs, dat, samp, run){
+set_Data <- compiler::cmpfun(function(type, error, obs, dat, samp, run){
   
   prepare_Data <- function(obs, dat, samp){
     return(list(resp.var=as.numeric(obs[samp]),
@@ -110,11 +110,11 @@ set_Data <- function(type, error, obs, dat, samp, run){
                expl.var=blist$expl.var, eval.expl.var=elist$expl.var) #covariates
   
   return(bdat = bdat)
-}
+})
 
 
 ## Functions to build the SDMs
-set_options <- function(model, level=c("linear", "squared", "interaction")){
+set_options <- compiler::cmpfun(function(model, level=c("linear", "squared", "interaction")){
   level <- match.arg(arg=level, choices=c("linear", "squared", "interaction"), several.ok=TRUE)
   
   if("GLM" %in% model){ #GLM options
@@ -213,7 +213,7 @@ set_options <- function(model, level=c("linear", "squared", "interaction")){
   }
   
   bopt
-}
+})
 
 #calculate cutoff based on maximizing TSS
 get.cutoff_slow <- function(pred, obs, pred.eval, obs.eval, method){
@@ -293,7 +293,7 @@ get.cutoff_slow <- function(pred, obs, pred.eval, obs.eval, method){
 }
 
 # the new get.cutoff() is 25% faster than the older version get.cutoff_slow
-get.cutoff <- function(pred, obs, pred.eval, obs.eval, method){
+get.cutoff <- compiler::cmpfun(function(pred, obs, pred.eval, obs.eval, method){
   p.cut <- seq(0,1,by=.001)
   responses1 <- c('Testing.data', 'Evaluating.data', 'Sensitivity', 'Specificity')
   stat <- array(NA, dim = c(length(method), length(p.cut), length(responses1)), dimnames = list(method, NULL, responses1))
@@ -368,17 +368,17 @@ get.cutoff <- function(pred, obs, pred.eval, obs.eval, method){
   }
   
   cutoff
-}
+})
 
 
 
-make_prediction <- function(bsdm, newData) {
+make_prediction <- compiler::cmpfun(function(bsdm, newData) {
 	if (inherits(bsdm, "glm") || inherits(bsdm, "gam")) { #gam objects inherit from classes glm and lm
 		preds <- predict(bsdm, newdata = newData, type = 'response', se.fit = FALSE)
 
 	} else if (inherits(bsdm, "maxent")) {
 		preds <- as.numeric(predict(bsdm, feature_matrix = newData)[, "1"])
-
+	
 	} else if (inherits(bsdm, "randomForest")) {
 		preds <- as.numeric(predict(bsdm, newdata = newData, type = "prob")[, "1"])
     
@@ -390,11 +390,11 @@ make_prediction <- function(bsdm, newData) {
 	}	
 	
 	preds
-}
+})
 
 
 #fit model, get cutoff, and evaluation statistics
-calc_sdms <- function(type, error, model, bdat, bopt, eval_disc.methods){
+calc_sdms <- compiler::cmpfun(function(type, error, model, bdat, bopt, eval_disc.methods){
   type <<- type	 #Need to pass 'type' because of model formulae
   error <<- error
   data.tmp <- cbind(bdat$resp.var,bdat$expl.var)
@@ -457,7 +457,7 @@ calc_sdms <- function(type, error, model, bdat, bopt, eval_disc.methods){
   	pred.eval <- make_prediction(bsdms$m, eval.tmp[, c("LnP", "MinT")])
   	pred.obs <- make_prediction(bsdms$m, data.tmp[, c("LnP", "MinT")])
   }
-
+  
   if (model == "RF") {
     bsdms$comp_time <- system.time(
 		temp <- randomForest::randomForest(x = data.tmp[, c("LnP", "MinT")], y = as.factor(data.tmp[, 1]), #classification random.forest: y must be a factor
@@ -506,17 +506,17 @@ calc_sdms <- function(type, error, model, bdat, bopt, eval_disc.methods){
   
   ##return list
   bsdms
-}
+})
 
 
 # Project the SDMs based on one region to the others
-make_projection <- function(bsdm, newData, projName = ""){
+make_projection <- compiler::cmpfun(function(bsdm, newData, projName = ""){
   preds <- make_prediction(bsdm, newData)
   list(projName = projName, pred = as.integer(1000 * round(preds, 3)))
-}
+})
 
 
-get.balanced.sample <- function(obs,samp){
+get.balanced.sample <- compiler::cmpfun(function(obs,samp){
   
   if(length(which(obs[samp]==1)) < .5*length(obs)){
     
@@ -534,10 +534,10 @@ get.balanced.sample <- function(obs,samp){
   
   
   return(samp)
-}
+})
 
 #previously used biomod 2 and now involves direct modeling and evaluation
-make.SDM <- function(i){
+make.SDM <- compiler::cmpfun(function(i){
 	ftemp <- get_temp_fname(runRequests[i, ], runRequestIDs[i])
 	if (!file.exists(ftemp)) {
 		print(paste(Sys.time(), "make.SDM:", i, paste(runRequests[i, ], collapse = "-")))
@@ -617,10 +617,10 @@ make.SDM <- function(i){
 							bresM$SDMs$m$family <- bresM$SDMs$m$family[c("family", "link")]
 							bresM$SDMs$m$class <- "gam"
 							bresM$SDMs$m[c('coefficients', 'family', 'edf', 'class')]
-						} else if (identical(bresM$SDMs$m, "MaxEnt")) {
+						} else if (identical(model, "MaxEnt")) {
 							bresM$SDMs$m$class <- "maxent"
 							bresM$SDMs$m
-						} else if (identical(bresM$SDMs$m, "RF")) {
+						} else if (identical(model, "RF")) {
 							bresM$SDMs$m$class <- "randomForest"
 							bresM$SDMs$m[c("type", "importance", "ntree", "mtry", "confusion", "class")]
 						} else if (identical(bresM$SDMs$m, "BRT")) {
@@ -633,15 +633,15 @@ make.SDM <- function(i){
 	}  
   
 	i
-}
+})
 
 
 ## Functions to evaluate models
-rmse <- function(obs, pred, na.rm=FALSE) sqrt(mean((obs - pred) ^ 2, na.rm=na.rm))
-mae <- function(obs, pred, na.rm=FALSE) mean(abs(obs - pred), na.rm=na.rm)
+rmse <- compiler::cmpfun(function(obs, pred, na.rm=FALSE) sqrt(mean((obs - pred) ^ 2, na.rm=na.rm)))
+mae <- compiler::cmpfun(function(obs, pred, na.rm=FALSE) mean(abs(obs - pred), na.rm=na.rm))
 
 
-calc_eval_regions <- function(i) {
+calc_eval_regions <- compiler::cmpfun(function(i) {
 	stat.methods <- c("Testing.data", "Evaluating.data", "Cutoff", "Sensitivity", "Specificity")
 	
 	res <- list(discrete = array(NA, dim = c(length(regions), length(eval_disc.methods), length(stat.methods)), dimnames = list(regions, eval_disc.methods, stat.methods)),
@@ -676,10 +676,10 @@ calc_eval_regions <- function(i) {
 	}
 	
 	res
-}
+})
 
 
-get_region_eval <- function(i) {
+get_region_eval <- compiler::cmpfun(function(i, ir, stat.methods) {
 	outs <- c(eval_disc.methods, eval_cont.methods)
 	res <- matrix(NA, nrow = length(stat.methods), ncol = length(outs), dimnames = list(stat.methods, outs))
 
@@ -695,9 +695,9 @@ get_region_eval <- function(i) {
 	}
 		
 	res
-}
+})
 
-calc_region_partition <- function(j) {
+calc_region_partition <- compiler::cmpfun(function(j) {
 	ftemp2 <- file.path(dir.tables, paste0("Partition_Props_region", ir, "_var", j, "_temp2.rds"))
 	if (action == "continue" && file.exists(ftemp2)) {
 		prop <- readRDS(file = ftemp2)
@@ -734,10 +734,72 @@ calc_region_partition <- function(j) {
 		saveRDS(prop, file = ftemp2)
 	}
 	prop
-}
+})
+
+calc_region_partition2 <- compiler::cmpfun(function(j, ir) {
+	ftemp2 <- file.path(dir.tables, "Partition", paste0("Partition_Props_region", ir, "_var", j, "_temp2.rds"))
+	if (action == "continue" && file.exists(ftemp2)) {
+		prop <- readRDS(file = ftemp2)
+	} else {
+		print(paste(Sys.time(), ": Partition of region:", ir, "; variable:", j, "of", length(variables)))
+
+		# with 320,000 cases, calling aov() uses about 31 GB of memory
+		# instead: repeat random subsample of runs and realizations
+		
+		tmp_dat <- mdata[, c(variables[j], colnames(runRequests))]
+		colnames(tmp_dat) <- c('y', colnames(runRequests))
+		irun <- tmp_dat[, "run"]
+		ireals <- tmp_dat[, "realizations"]
+		tmp_dat$realizations <- apply(tmp_dat[,factors], 1, paste,collapse=".")
+
+		aov_formula1 <- y ~ factor(types)*factor(errors)*factor(models)*factor(mlevels)
+		fnames <- attr(terms.formula(aov_formula1), "term.labels")
+		fnames <- c("realizations", gsub("factor(", "", gsub(")", "", trimws(fnames), fixed = TRUE), fixed = TRUE), "Residuals")
+		prop <- array(NA, dim = c(repeatsN_partition_subsample, length(fnames), 2),
+							dimnames = list(NULL, fnames, c('SS', 'prop')))
+
+		set.seed(127)
+
+		for (im in seq_len(repeatsN_partition_subsample)) {
+# sample(., size = x)
+#	- x = 1: subset size of 14240 and uses 2.1 GB during the aov() call, but within-SS is not estimable
+# 	- x = 3: subset size of 41760 and uses 4.6 GB during the aov() call
+#	- x1 = 4, x2 = 4: subset size of 55040 and uses 5.7 GB during the aov() call
+#	- x1 = 5, x2 = 4: subset size of 60800 and uses 8.0 GB during the aov() call
+
+			tmp_sub <- irun %in% sample(x = evaluationRepeatsN, size = 4) |
+						ireals %in% sample(x = presenceRealizationsN, size = 4)
+#			tmp_sub <- irun %in% sample(x = evaluationRepeatsN, size = 0) |
+#						ireals %in% sample(x = presenceRealizationsN, size = 1)
+
+			is_balanced <- all(diff(table(tmp_dat[tmp_sub, head(factors, n = -1)])) == 0)
+			if (!is_balanced) next
+
+			aov_sum <- summary(aov(as.formula(paste("y ~", as.character(aov_formula1)[3], "+ Error(realizations)")),
+									data = tmp_dat, subset = tmp_sub))		
+
+			if (length(aov_sum) == 2) {
+				#extract sum of squares
+				prop[im, 1, "SS"]  <- aov_sum[["Error: Within"]][[1]][, "Sum Sq"]
+				prop[im, -1, "SS"] <- aov_sum[["Error: realizations"]][[1]][, "Sum Sq"]
+
+				#calculate proportion of variation explained
+				prop[im, , 'prop'] <- as.numeric(prop[im, , "SS"]) / sum(as.numeric(prop[im, , "SS"]))
+			} else {
+				stop(str(prop))
+			}
+		}
+		
+		#coverage <- sum(tmp_sub) / length(tmp_sub)
+		
+		saveRDS(prop, file = ftemp2)
+	}
+	prop
+})
 
 
-eval3.SDMs <- function(i){
+
+eval3.SDMs <- compiler::cmpfun(function(i){
 	ftemp <- get_temp_fname(runEvals[i, ], runEvalIDs[i])
 	if (!file.exists(ftemp)) {
 		print(paste(Sys.time(), "eval3.SDMs:", i, paste(runEvals[i, ], collapse = "-")))
@@ -790,7 +852,7 @@ eval3.SDMs <- function(i){
 
 			#Evaluate projections based on complete dataset
 			for (j in 1:nrow(ids)) {
-			  etemp <- get_region_eval(xt[j])
+			  etemp <- get_region_eval(xt[j], ir, stat.methods)
 			  temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- t(etemp[, eval_disc.methods])
 			  temp.Prob[, ids[j, "realizations"], ids[j, "run"]] <- etemp[1, eval_cont.methods]
 			}
@@ -822,16 +884,16 @@ eval3.SDMs <- function(i){
 		}
 	
 		
-		writeRDS(bevalM, file = ftemp)
+		saveRDS(bevalM, file = ftemp)
 	}
   	
 	i
-}
+})
 
 
 
 ## Functions to estimate model complexity
-get_complexity <- function(i) {	
+get_complexity <- compiler::cmpfun(function(i) {	
 	bresM <- try(readRDS(file = get_temp_fname(runRequests[i, ], runRequestIDs[i])), silent = TRUE)
 	res <- rep(NA, 2)
 	
@@ -845,9 +907,9 @@ get_complexity <- function(i) {
 					}
 		res[2] <- bresM$SDMs$comp_time
 	}
-	
+
 	res
-}
+})
 
 plot_complexity <- function(preds = NULL, y, ylab, fname) {
 	dir.create(dir_temp <- file.path(dir.figs, "Complexity"), showWarnings = FALSE)
@@ -877,6 +939,197 @@ plot_complexity <- function(preds = NULL, y, ylab, fname) {
 	mtext(ylab,side=2,line=2.5)
 	par(op)
 	dev.off()
+}
+
+calc_NT1 <- function(refdat, prodat) {
+	stopifnot(identical(colnames(refdat), colnames(prodat)))
+	
+	#——————————————————————–#
+	# NT1 – UNIVARIATE EXTRAPOLATION
+	#——————————————————————–#
+	# Mesgaran, M. B., R. D. Cousens, B. L. Webber, and J. Franklin. 2014. Here be dragons: a tool for quantifying novelty due to covariate range and correlation change when projecting species distribution models. Diversity and Distributions 20:1147-1159.
+	# code based on comment by Matthew Bayly to https://pvanb.wordpress.com/2014/05/13/a-new-method-and-tool-exdet-to-evaluate-novelty-environmental-conditions/
+
+	range_ref <- t(matrixStats::colRanges(refdat))
+	#dimnames(range_ref) <- list(c("min", "max"), colnames(refdat))
+	range_ref_arr <- array(range_ref, dim = c(dim(range_ref), nrow(prodat)), dimnames = list(c("min", "max"), colnames(refdat), NULL))
+
+	diffs_ref <- matrixStats::colDiffs(range_ref)
+	#colnames(diffs_ref) <- colnames(refdat)
+	diffs_ref_arr <- matrix(diffs_ref, nrow = nrow(prodat), ncol = ncol(prodat), byrow = TRUE)
+
+	iud <- array(0, dim = c(dim(prodat), 3))
+	iud[, , 2] <- prodat - t(range_ref_arr["min", ,])
+	iud[, , 3] <- t(range_ref_arr["max", ,]) - prodat
+
+	UDs <- apply(iud, 1:2, min) / diffs_ref_arr
+	NT1 <- rowSums(UDs)
+}
+
+calc_NT2 <- function(refdat, prodat) {
+	stopifnot(identical(colnames(refdat), colnames(prodat)))
+
+	#——————————————————————–#
+	# NT2 – MULTIVARIATE EXTRAPOLATION
+	#——————————————————————–#
+	# Mesgaran, M. B., R. D. Cousens, B. L. Webber, and J. Franklin. 2014. Here be dragons: a tool for quantifying novelty due to covariate range and correlation change when projecting species distribution models. Diversity and Distributions 20:1147-1159.
+	# code modified from on https://pvanb.wordpress.com/2014/05/13/a-new-method-and-tool-exdet-to-evaluate-novelty-environmental-conditions/
+
+	# Calculate the average and covariance matrix of the variables 
+	# in the reference set
+	ref.av  <- colMeans(refdat, na.rm=TRUE)
+	ref.cov <- var(refdat, na.rm=TRUE)
+ 
+	# Calculate the mahalanobis distance of each raster 
+	# cell to the environmental center of the reference 
+	# set for both the reference and the projection data 
+	# set and calculate the ratio between the two.
+	mah.ref <- mahalanobis(x = refdat, center = ref.av, cov = ref.cov)
+	mah.pro <- mahalanobis(x = prodat, center = ref.av, cov = ref.cov)
+	mah.max <- max(mah.ref[is.finite(mah.ref)])
+	NT2 <- mah.pro / mah.max
+}
+
+plot_extrapolation <- function(NT1rast, NT2rast, file) {
+#——————————————————————–#
+# Plot the extrapolation rasters
+#——————————————————————–#
+
+	nt2_max <- ceiling(cellStats(NT2rast, max))
+	n <- 0:255
+	d <- nt2_max / length(n)
+	n1 <- round(1 / d)
+	zlim1 <- c(cellStats(NT1rast, min), 0)
+	zlim2 <- c(0, nt2_max)
+	blegend <- c(-95, -93.5, 30, 48)
+
+	cols_sim <- colorRampPalette(c("gray", "darkslategray1"))
+	cols_diss <- colorRampPalette(c("gold1", "orange", "red", "darkred", "purple"))
+	cols_NT1 <- cols_NT2 <- list()
+	cols_NT1[["added_below"]] <- cols_NT1[["added_above"]] <- FALSE
+	cols_NT1[["colors_label"]] <- rev(c("gray", cols_diss(n = length(n) - 1)))
+	cols_NT2[["added_below"]] <- cols_NT2[["added_above"]] <- FALSE
+	cols_NT2[["colors_label"]] <- c(cols_sim(n = n1), cols_diss(n = length(n) - n1))
+
+
+	cex <- 1
+	npanelsX <- 2; npanelsY <- 1
+	h.panel <- 2.5; h.edge_lo <- 0.2; h.edge_up <- 0.05
+	w.panel <- 1.8; w.edge_left <- 0.1; w.edge_right <- 0.0
+
+	png(height = h.edge_lo + h.panel * npanelsX +  h.edge_up,
+		width = w.edge_left + w.panel * (1 + npanelsY) + w.edge_right, units = "in",
+		res = 600, file = file)
+
+	panels <- matrix(0, nrow = 1 + npanelsX + 1, ncol = 1 + npanelsY + 1, byrow=FALSE)
+	panels[-c(1, nrow(panels)), -c(1, ncol(panels))] <- 1:(npanelsX * npanelsY)
+	layout(panels,
+			heights = c(h.edge_up, rep(h.panel, times = npanelsX), h.edge_lo),
+			widths = c(w.edge_left, rep(w.panel, times = npanelsY), w.edge_right))
+	op <- par(mgp = c(1, 0, 0), mar = c(0.5, 0.5, 0.5, 0.2), tcl = 0.3, cex = cex, xpd = NA)
+
+		raster::image(NT1rast, asp = 1, zlim = zlim1, col = cols_NT1[["colors_label"]], xlab = "", ylab = "", axes = FALSE)
+		add_legend(zlim = zlim1, zextreme = zlim1, col_desc = cols_NT1, grid = NT1rast, box = blegend, cex = 0.85)
+		raster::image(rbaseRegion, col = "darkgray", add = TRUE)
+		plot(allborders, add = TRUE)
+		axis(2)
+		mtext(text = "(a)", line = -1, adj = 0.05, font = 2)
+
+		raster::image(NT2rast, asp = 1, zlim = zlim2, col = cols_NT2[["colors_label"]], xlab = "", ylab = "", axes = FALSE)
+		add_legend(zlim = zlim2, zextreme = zlim2, col_desc = cols_NT2, grid = NT2rast, box = blegend, cex = 0.85)
+		image(rbaseRegion, col = "darkgray", add = TRUE)
+		plot(allborders, add = TRUE)
+		axis(1); axis(2)
+		mtext(text = "(b)", line = -1, adj = 0.05, font = 2)
+	par(op)
+	dev.off()
+}
+
+# Create and plot a continuous color legend
+add_legend <- function(zlim, zextreme, col_desc, grid, box=c(-100, -97, -50, -10), whitebox=TRUE, horiz=FALSE, signed=1, fun_inv_ens=NULL, srt=90, cex=1){
+	if(is.null(fun_inv_ens)) fun_inv_ens <- function(x) x
+
+	# Color ramp
+	zr <- raster(xmn=box[1], xmx=box[2], ymn=box[3], ymx=box[4], crs=projection(grid), resolution=res(grid), vals=NULL)
+	zr[] <- if(horiz) rep(1:dim(zr)[2], times=dim(zr)[1]) else rep(dim(zr)[1]:1, each=dim(zr)[2])
+	if(whitebox) raster::image(zr, col="white", add=TRUE)
+	raster::image(zr, col=col_desc$colors_label, add=TRUE)
+
+	# Labels	
+	atz <- pretty(zlim, n=6) #generate default labels	
+	if((temp1z <- sum(temp2z <- atz <= zlim[1])) > 0){#adjust lowest label to limit value
+		atz[tail(which(temp2z), n=1)] <- zlim[1]
+		if(temp1z > 1) atz <- atz[-head(which(temp2z), n=-1)]
+	}
+	if((temp1z <- sum(temp2z <- atz >= zlim[2])) > 0){#adjust highest label to limit value
+		atz[head(which(temp2z), n=1)] <- zlim[2]
+		if(temp1z > 1) atz <- atz[-tail(which(temp2z), n=-1)]
+	}
+	datz <- diff(atz)
+	temp <- 0.8 / (if(abs(srt) > 45) cex else 1)
+	if(length(datz) > 0 && length(temp <- which(datz < temp * max(datz))) > 0){#remove labels if too close together, but not limits and not 0
+		id_remove <- findInterval(x=1+temp, vec=1:length(atz), all.inside=TRUE)
+		if(length(temp <- which(0 == atz[id_remove])) > 0) id_remove <- id_remove[-temp]
+		if(length(id_remove) > 0) atz <- atz[-id_remove]
+	}
+	if(length(datz) == 0) atz <- zextreme
+	ltxt <- prettyNum(signif(signed * fun_inv_ens(atz), 2))
+	ltext_extreme <- prettyNum(signif(signed * fun_inv_ens(zextreme), 2))
+	
+	# Tick position
+	ext <- extent(zr)
+	if(horiz){
+		xmin_orig <- ext@xmin
+		if(col_desc$added_below) xmin_orig <- xmin_orig + col_desc$ncol_label_added / length(col_desc$colors_label) * (ext@xmax - ext@xmin)
+		xmax_orig <- ext@xmax
+		if(col_desc$added_above) xmax_orig <- xmax_orig - col_desc$ncol_label_added / length(col_desc$colors_label) * (ext@xmax - ext@xmin)
+		xs_orig <- (temp <- atz / (max(atz) - min(atz)) * (xmax_orig - xmin_orig)) + (xmin_orig - min(temp))
+	} else {
+		ymin_orig <- ext@ymin
+		if(col_desc$added_below) ymin_orig <- ymin_orig + col_desc$ncol_label_added / length(col_desc$colors_label) * (ext@ymax - ext@ymin)
+		ymax_orig <- ext@ymax
+		if(col_desc$added_above) ymax_orig <- ymax_orig - col_desc$ncol_label_added / length(col_desc$colors_label) * (ext@ymax - ext@ymin)
+		ys_orig <- (temp <- atz / (max(atz) - min(atz)) * (ymax_orig - ymin_orig)) + (ymin_orig - min(temp))
+	}
+	
+	# Draw ticks
+	lwd_seg <- max(0.5, min(1, cex)) * par("lwd")
+	if(horiz){
+		segments(x0=xs_orig, x1=xs_orig, y0=ext@ymax - (ext@ymax - ext@ymin) / 3, y1=ext@ymax, lwd=lwd_seg)
+		if(col_desc$added_below) segments(x0=ext@xmin, x1=ext@xmin, y0=ext@ymin, y1=ext@ymax, lwd=lwd_seg)
+		if(col_desc$added_above) segments(x0=ext@xmax, x1=ext@xmax, y0=ext@ymin, y1=ext@ymax, lwd=lwd_seg)
+	} else {
+		segments(x0=ext@xmax - (ext@xmax - ext@xmin) / 3, x1=ext@xmax, y0=ys_orig, y1=ys_orig, lwd=lwd_seg)
+		if(col_desc$added_below) segments(x0=ext@xmin, x1=ext@xmax, y0=ext@ymin, y1=ext@ymin, lwd=lwd_seg)
+		if(col_desc$added_above) segments(x0=ext@xmin, x1=ext@xmax, y0=ext@ymax, y1=ext@ymax, lwd=lwd_seg)
+	}
+	
+	# Write tick labels
+	if(horiz){
+		if(abs(srt) > 45){
+			adj <- c(0.5, 1.3)
+			ly <- ext@ymax
+		} else {
+			adj <- c(0.5, NA)
+			ly <- ext@ymax + strheight(ltxt, units="user", cex=cex * 1.05)
+		}
+		text(x=xs_orig, y=ly, labels=ltxt, srt=srt, adj=adj, cex=cex, xpd=TRUE)
+		if(col_desc$added_below) text(x=ext@xmin, y=ext@ymax, labels=ltext_extreme[1], srt=90, adj=c(1.3, 1), cex=cex, xpd=TRUE)
+		if(col_desc$added_above) text(x=ext@xmax, y=ext@ymax, labels=ltext_extreme[2], srt=90, adj=c(-0.5, 1), cex=cex, xpd=TRUE)
+	} else {
+		if(abs(srt) > 45){
+			adj <- c(0.5, 1.3)
+			lx <- ext@xmax
+		} else {
+			adj <- c(1, NA)
+			lx <- ext@xmax + (if(ext@xmax > 0) -1 else +1) * max(strwidth(ltxt, units="user", cex=cex * if(cex < 0.5) 1.5 else 1.05))
+		}
+		text(x=lx, y=ys_orig, labels=ltxt, srt=srt, adj=adj, cex=cex, xpd=TRUE)
+		if(col_desc$added_below) text(x=ext@xmax, y=ext@ymin, labels=ltext_extreme[1], srt=0, adj=c(1, 1.3), cex=cex, xpd=TRUE)
+		if(col_desc$added_above) text(x=ext@xmax, y=ext@ymax, labels=ltext_extreme[2], srt=0, adj=c(1, -0.5), cex=cex, xpd=TRUE)
+	}
+		
+	invisible(0)
 }
 
 
@@ -914,7 +1167,7 @@ map_distributions <- function(Obs, Fit, XY, model, fun = mean, maxPred = 1000, f
   }
 }
 
-our.response.plot2 <- function(modelObj, modelName, Data, orig.variables, scaled.variables=NULL, centerMeans, data_species, fixed.var.metric = 'mean'){
+our.response.plot2 <- compiler::cmpfun(function(modelObj, modelName, Data, orig.variables, scaled.variables=NULL, centerMeans, data_species, fixed.var.metric = 'mean'){
 ##biomod2::response.plot2:
 #	- doesn't find loaded models even though they were loaded properly
 #	--> our own version  loads the model instead of assuming that the models are loaded
@@ -995,7 +1248,7 @@ our.response.plot2 <- function(modelObj, modelName, Data, orig.variables, scaled
 
 	invisible(list.out)
 
-}
+})
 
 
 plot_scatterPredvsTrueProbs <- function(Prob, Fit, model, maxPred = 1000, figname){
@@ -1237,7 +1490,7 @@ make2.figures <- function(i, type, error, mlevel, model, runID, bsub){
   return(success)
 }
 
-work <- function() {
+work <- compiler::cmpfun(function() {
   # Note the use of the tag for sent messages: 1=ready_for_task, 2=done_task, 3=exiting
   # Note the use of the tag for received messages: 1=task, 2=done_tasks
   junk <- 0
@@ -1268,5 +1521,5 @@ work <- function() {
     # We'll just ignore any unknown messages
   }
   mpi.send.Robj(junk, 0, 3)
-}
+})
 
