@@ -117,6 +117,8 @@ set_Data <- compiler::cmpfun(function(type, error, obs, dat, samp, run){
 set_options <- compiler::cmpfun(function(model, level=c("linear", "squared", "interaction")){
   level <- match.arg(arg=level, choices=c("linear", "squared", "interaction"), several.ok=TRUE)
   
+  bopt <- list()
+  
   if("GLM" %in% model){ #GLM options
     term <- NULL
     if(any(level == "linear")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "LnP + MinT")
@@ -138,10 +140,9 @@ set_options <- compiler::cmpfun(function(model, level=c("linear", "squared", "in
     formGAM <- formula(paste0("eval(parse(text=type)) ~ ", term))
    
     bopt <- list(myFormula=formGAM,
-				   algo='GAM_mgcv',
 				   k=NULL,                    
 				   family=binomial(link = 'logit'),
-				   control=gam.control(epsilon = 1e-06, 
+				   control=mgcv::gam.control(epsilon = 1e-06, 
 									   trace = FALSE, 
 									   maxit = 100,
 									   keepData=TRUE))
@@ -177,19 +178,42 @@ set_options <- compiler::cmpfun(function(model, level=c("linear", "squared", "in
 				set_heldout = 0)
   }
 
+  if ("MaxEntP" %in% model) { # This is the Phillips implementation of MaxEnt!
+  	# Requires their java application: download from http://www.cs.princeton.edu/~schapire/maxent
+	
+	bopt <- list(path_to_maxent.jar = path_to_MaxEntP,
+				memory_allocated = 512,
+				maximumiterations = 500, # default = 500; biomod2 = 200 (but not used?)
+				linear = TRUE,
+				quadratic = TRUE,
+				product = any(level == "interaction"), #interactions
+				threshold = TRUE,
+				hinge = TRUE,
+				lq2lqptthreshold = 80,
+				l2lqthreshold = 10,
+				hingethreshold = 15,
+				beta_threshold = -1.0,
+				beta_categorical = -1.0,
+				beta_lqp = -1.0,
+				beta_hinge = -1.0,
+				betamultiplier = 1, # regularization? 0, no regularization
+				defaultprevalence = 0.5)
+	
+  }
+
   if ("RF" %in% model) {
     term <- NULL
     if (any(level == "linear")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "LnP + MinT")
-#    if (any(level == "squared")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(LnPScaled * LnPScaled) + I(MinTScaled * MinTScaled)")
-#    if (any(level == "interaction")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(MinTScaled * LnPScaled)")
+    #if (any(level == "squared")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(LnPScaled * LnPScaled) + I(MinTScaled * MinTScaled)")
+    #if (any(level == "interaction")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(MinTScaled * LnPScaled)")
     formRF <- formula(paste0("eval(parse(text=type)) ~ ", term))
 
 	# Breiman, L (2002), “Manual On Setting Up, Using, And Understanding Random Forests V3.1”, https://www.stat.berkeley.edu/~breiman/Using_random_forests_V3.1.pdf
 	# Cutler, D. R., T. C. Edwards, K. H. Beard, A. Cutler, K. T. Hess, J. Gibson, and J. J. Lawler. 2007. Random forests for classification in ecology. Ecology 88:2783-2792.
 	bopt <- list(myFormula = formRF,
-                      ntree = 1001, # Number of trees to grow. This should not be set to too small a number, to ensure that every input row gets predicted at least a few times.; Cutler et al. 2007: even ntree = 50 produced quite stable results; odd number so that there will be no ties in predictions (which would be broken at random)
-                      mtry = if (any(level == "interaction")) 2 else 1, # 'default' for classification (sqrt(p) where p is number of variables in x); Cutler et al. 2007: RF is insensitive to mtry
-                      nodesize = 5, #NOTE: randomForest's default for classification is 1 (which Breiman 2002 recommends); biomod2 sets it to 5. Minimum size of terminal nodes. Setting this number larger causes smaller trees to be grown (and thus take less time). Note that the default values are different for classification (1) and regression (5).
+                      ntree = 501, # Number of trees to grow. This should not be set to too small a number, to ensure that every input row gets predicted at least a few times.; Cutler et al. 2007: even ntree = 50 produced quite stable results; odd number so that there will be no ties in predictions (which would be broken at random)
+                      mtry = if (any(level == "interaction")) 2L else 1L, # 'default' for classification (sqrt(p) where p is number of variables in x); Cutler et al. 2007: RF is insensitive to mtry
+                      nodesize = if (any(level == "interaction")) 1L else 5L, #NOTE: randomForest's default for classification is 1 (which Breiman 2002 recommends); biomod2 sets it to 5. Minimum size of terminal nodes. Setting this number larger causes smaller trees to be grown (and thus take less time). Note that the default values are different for classification (1) and regression (5).
                       maxnodes = NULL)
   }
 
@@ -197,19 +221,26 @@ set_options <- compiler::cmpfun(function(model, level=c("linear", "squared", "in
     term <- NULL
     if (any(level == "linear")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "LnP + MinT")
     if (any(level == "squared")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(LnPScaled * LnPScaled) + I(MinTScaled * MinTScaled)")
-#    if (any(level == "interaction")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(MinTScaled * LnPScaled)")
+   #if (any(level == "interaction")) term <- paste0(term, ifelse(length(term) > 0, " + ", ""), "I(MinTScaled * LnPScaled)")
     formBRT <- formula(paste0("eval(parse(text=type)) ~ ", term))
-
+	
+	# gbm vignette: "I usually aim for 3,000 to 10,000 iterations with shrinkage rates between 0.01 and 0.001"
+	# 5/BRT/woInt/AIF/binom/1/1: 	shrinkage	n.trees.optim
+	#								0.001		17534
+	#								0.005		3425
+	#								0.01		2588
 	bopt <- list(myFormula = formBRT,
-						n.trees = 2500,
-						interaction.depth = if (any(level == "interaction")) 2L else 1L,
+						n.trees = 3500, # biomod2 has 2500, but also shrinkage 0.001 (and doesn't use gbm.more), they likely use too few trees; according to vignette: it may need 10,000 trees to get optimal performance with 0.001 shrinkage
+						interaction.depth = if (any(level == "interaction")) 4L else 1L,
 						n.minobsinnode = 5,
-						shrinkage = 0.001,
-						bag.fraction = 0.5,
+						shrinkage = 0.005, #biomod2 has 0.001
+						bag.fraction = 0.5, # gbm vignette: "(0.5 is recommended), gbm computes an out-of-bag estimate of the improvement in predictive performance"
 						train.fraction = 1,
-						cv.folds = 0, #NOTE: biomod2 has this set to 3; 1 expresses a bug in gbm::gbm
+						perf.method = "cv",
+						cv.folds = 5, #NOTE: biomod2 has this set to 3; 1 expresses a bug in gbm::gbm; gbm vignette: "My recommendation is to use 5- or 10-fold cross validation if you can afford the computing time"
 						keep.data = FALSE,
 						verbose = FALSE)
+	if (!(bopt$perf.method == "cv")) bopt$cv.folds <- 0
   }
   
   bopt
@@ -369,7 +400,7 @@ get.cutoff <- compiler::cmpfun(function(pred, obs, pred.eval, obs.eval, method){
   
   cutoff
 })
-
+	
 
 
 make_prediction <- compiler::cmpfun(function(bsdm, newData) {
@@ -377,143 +408,271 @@ make_prediction <- compiler::cmpfun(function(bsdm, newData) {
 		preds <- predict(bsdm, newdata = newData, type = 'response', se.fit = FALSE)
 
 	} else if (inherits(bsdm, "maxent")) {
-		preds <- as.numeric(predict(bsdm, feature_matrix = newData)[, "1"])
+		preds <- predict(bsdm, feature_matrix = newData[, c("LnP", "MinT")])[, "1"]
+	
+	} else if (inherits(bsdm, "MaxEntP")) {
+		stop("predict.MaxEntP not implemented yet")
 	
 	} else if (inherits(bsdm, "randomForest")) {
-		preds <- as.numeric(predict(bsdm, newdata = newData, type = "prob")[, "1"])
+		preds <- predict(bsdm, newdata = newData, type = "prob")[, "1"]
     
     } else if (inherits(bsdm, "gbm")) {
-    	preds <- predict(bsdm, newdata = newData, type = "response", n.trees = bsdm$n.trees)
+    	preds <- predict(bsdm, newdata = newData, type = "response", n.trees = bsdm[["n.trees.opt"]])
 
 	} else {
 		preds <- NULL
 	}	
 	
-	preds
+	as.numeric(preds)
+})
+
+make_integer <- compiler::cmpfun(function(x) as.integer(1000 * round(x, 3)))
+
+
+calc_sdms_and_predict <- compiler::cmpfun(function(runID, bdat, bopt, new_regions, new_data, scaled.variables, orig.variables, centerMeans, eval_disc.methods, dir_temp = NULL){
+	# Data for model fitting
+	vars <- c(orig.variables, scaled.variables)
+	type <<- runID["types"]	 #Need to pass 'type' because of model formulae
+	data.tmp <- cbind(bdat$resp.var, bdat$expl.var[, vars])
+	colnames(data.tmp)[1] <- runID["types"]
+
+	# Data for model evaluation
+	eval.tmp <- cbind(bdat$eval.resp.var, bdat$eval.expl.var[, vars])
+	colnames(eval.tmp)[1] <- runID["types"]
+  
+	# Data for predictions
+	ptemp_obs <- cbind(species = rep("obs", nrow(data.tmp)), bdat[["resp.xy"]][, c("x", "y")], data.tmp[, vars])
+	ptemp_eval <- cbind(species = rep("eval", nrow(eval.tmp)), bdat[["eval.resp.xy"]][, c("x", "y")], eval.tmp[, vars])
+	ptemp_regions <- do.call(rbind, lapply(seq_along(new_regions), function(ir)
+						cbind(species = names(new_regions)[ir], new_data[new_regions[[ir]], c("x", "y", vars)])))
+	dat_curves <- lapply(seq_along(new_regions), function(ir)
+							pred.response.plot2(data_species = new_data[new_regions[[ir]], "obs"],
+										data_env = ptemp_regions[ptemp_regions[, "species"] == names(new_regions)[ir], vars],
+										orig.variables, scaled.variables, centerMeans,
+										fixed.var.metric = 'mean')) #mean was proposed in the 'evaluation strip' by Elith et al. 2005
+	ptemp_curves <- do.call(rbind, do.call(rbind, lapply(seq_along(new_regions), function(ir) lapply(seq_along(dat_curves[[ir]]), function(ic) {
+						x <- dat_curves[[ir]][[ic]][["new_data"]]
+						cbind(species = paste0("region", ir, "_rc_", names(dat_curves[[ir]])[ic]), x = 0, y = 0, x[, vars])}))))
+	
+	dat_pred <- rbind(ptemp_obs, ptemp_eval, ptemp_regions, ptemp_curves)
+	id_pred <- dat_pred[, "species"]
+
+
+	# Model fitting
+	bsdms <- list()
+	bsdms$DEV <- NA
+  
+	if (runID["models"] == 'GLM') {
+		bsdms$comp_time <- system.time(
+			temp <- stats::glm(formula = bopt$myFormula,
+								family = bopt$family,
+								data = data.tmp,
+								#mustart = rep(bopt$mustart,nrow(data.tmp)),
+								control = bopt$control,
+								x = FALSE, y = FALSE))["elapsed"]
+		bsdms$m <- temp
+		bsdms$DEV <- deviance(bsdms$m)
+	} else
+  
+	if (runID["models"] == 'GAM') {
+		bsdms$comp_time <- system.time(
+			temp <- mgcv::gam(formula = bopt$myFormula,
+						   family = bopt$family,
+						   data = data.tmp,
+						   control = bopt$control))["elapsed"]
+		bsdms$m <- temp
+		bsdms$DEV <- deviance(bsdms$m)
+	} else 
+  
+	if (runID["models"] == "MaxEnt") {
+#		# http://www.nactem.ac.uk/tsuruoka/maxent/
+#		warning("This is the Tsuruoka and not the Phillips implementation of MaxEnt!")
+#	
+#		if (any(grepl("I(MinTScaled * LnPScaled)", as.character(attr(terms(bopt$myFormula), "variables")), fixed = TRUE))) {
+#			# with interaction
+#			feature_matrix <- with(data.tmp, data.frame(LnP = LnP, MinT = MinT, LnP_x_MinT = MinTScaled * LnPScaled))
+#		} else { #no interaction
+#			feature_matrix <- with(data.tmp, data.frame(LnP = LnP, MinT = MinT))
+#		}
+  	
+		bsdms$comp_time <- system.time(
+			temp <- maxent::maxent(feature_matrix = data.tmp[, c("LnP", "MinT")],
+								code_vector = as.factor(data.tmp[, 1]),
+								l1_regularizer = bopt$l1_regularizer,
+								l2_regularizer = bopt$l2_regularizer,
+								use_sgd = bopt$use_sgd,
+								set_heldout = bopt$set_heldout,
+								verbose = FALSE))["elapsed"]
+		bsdms$m <- temp
+	} else 
+  
+	if (runID["models"] == "MaxEntP") {		
+		# Setup Phillips-Maxent
+		#	- directories
+		dir_temp_MEP <- file.path(dir_temp, paste(runID, collapse = "_"))
+		dir_work_MEP <- file.path(dir_temp_MEP, "MaxEnt_Phillips_work")
+		dir_out_MEP <- file.path(dir_temp_MEP, "MaxEnt_Phillips_output")
+		temp <- lapply(c(dir_work_MEP, dir_out_MEP), function(x) dir.create(path = x, showWarnings = FALSE, recursive = TRUE))
+		
+		#	- observational data
+		sp_name <- c(absence = "background", presence = as.character(runID["types"]))
+		iobs <- lapply(c(0, 1), function(x) data.tmp[, 1] == x)
+		names(iobs) <- names(sp_name)
+		dat_obs_MEP <- lapply(seq_along(sp_name), function(x)
+								cbind(species = rep(sp_name[[x]], sum(iobs[[x]])), 
+								bdat[["resp.xy"]][iobs[[x]], c("x", "y")],
+								data.tmp[iobs[[x]], c("LnP", "MinT")]))
+		names(dat_obs_MEP) <- names(sp_name)
+		temp <- lapply(names(dat_obs_MEP), function(x) write.table(dat_obs_MEP[[x]],
+									file = file.path(dir_work_MEP, paste0(x, ".csv")),
+									quote = FALSE, row.names = FALSE, sep = ","))
+		
+		#	- data for predictions
+		write.table(dat_pred[, c("species", "x", "y", "LnP", "MinT")], file = file.path(dir_work_MEP, "predict.csv"), quote = FALSE, row.names = FALSE, sep = ",")
+
+  		# Run Phillips-Maxent
+		comp_time2 <- system.time(
+			temp <- system2(command = "java", args = paste0(
+							 "-mx", bopt$memory_allocated, "m",
+							 " -jar ", file.path(bopt$path_to_maxent.jar, "maxent.jar"), 
+							 " environmentallayers=\"", file.path(dir_work_MEP, "absence.csv"),
+							 "\" samplesfile=\"", file.path(dir_work_MEP, "presence.csv"),
+							 "\" projectionlayers=\"", file.path(dir_work_MEP, "predict.csv"), 
+							 "\" outputdirectory=\"", dir_out_MEP, "\"",
+							 " outputformat=logistic ",
+							 " maximumiterations=", bopt$maximumiterations,
+							 " linear=", bopt$linear,
+							 " quadratic=", bopt$quadratic,
+							 " product=", bopt$product,
+							 " threshold=", bopt$threshold,
+							 " hinge=", bopt$hinge,
+							 " lq2lqptthreshold=", bopt$lq2lqptthreshold,
+							 " l2lqthreshold=", bopt$l2lqthreshold,
+							 " hingethreshold=", bopt$hingethreshold,
+							 " beta_threshold=", bopt$beta_threshold,
+							 " beta_categorical=", bopt$beta_categorical,
+							 " beta_lqp=", bopt$beta_lqp,
+							 " beta_hinge=", bopt$beta_hinge,
+							 " betamultiplier=", bopt$betamultiplier,
+							 " defaultprevalence=", bopt$defaultprevalence,
+							 " autorun redoifexists", 
+							 " plots nodoclamp novisible nowarnings notooltips noaddsamplestobackground",
+							 " nowritebackgroundpredictions"),
+					stdout = TRUE, stderr = TRUE)
+		)["elapsed"]
+	
+		# computational time as reported by MaxEntP
+		temp <- readLines(con = file.path(dir_out_MEP, "maxent.log"), n = 38)[38]
+		bsdms$comp_time <- as.numeric(strsplit(temp, split = " ", fixed = TRUE)[[1]][4])
+		bsdms$comp_time_total <- comp_time2
+	
+		# model
+		m <- list(	lambdas = readLines(con = file.path(dir_out_MEP, paste0(runID["types"], ".lambdas"))),
+					evals = read.csv(file.path(dir_out_MEP, "maxentResults.csv")))
+		class(m) <- "MaxEntP"
+		bsdms$m <- m
+	} else 
+
+	if (runID["models"] == "RF") {
+		bsdms$comp_time <- system.time(
+			temp <- randomForest::randomForest(x = data.tmp[, c("LnP", "MinT")], y = as.factor(data.tmp[, 1]), #classification random.forest: y must be a factor
+#	 										formula = bopt$myFormula, #For large data sets, especially those with large number of variables, calling randomForest via the formula interface is not advised: There may be too much overhead in handling the formula.
+#	  										data = data.tmp,
+											ntree = bopt$ntree,
+											mtry = bopt$mtry,
+											importance = FALSE,
+											norm.votes = TRUE,
+#											strata = factor(c(0, 1)), # NOTE: biomod2 sets this, but it has no influence on result
+											nodesize = bopt$nodesize,
+											maxnodes = bopt$maxnodes))["elapsed"]
+	
+		temp[["OOB"]] <- temp$err.rate[temp$ntree, "OOB"] #OOB estimate of error rate
+	
+		bsdms$m <- temp
+	} else 
+
+	if (runID["models"] == "BRT") {
+		its <- 0
+	
+		# gbm vignette: "I usually aim for 3,000 to 10,000 iterations with shrinkage rates between 0.01 and 0.001"
+		comp_time2 <- system.time(
+			while (	bopt$shrinkage <= 0.1 && bopt$shrinkage >= 0.0001 && its < 10) {
+				its <- its + 1
+				comp_time1 <- system.time(
+					temp <- gbm::gbm(formula = bopt$myFormula,
+									distribution = "bernoulli",
+									data = data.tmp,
+									n.trees = bopt$n.trees, 
+									cv.folds = bopt$cv.folds,
+									interaction.depth = bopt$interaction.depth, 
+									n.minobsinnode = bopt$n.minobsinnode,
+									shrinkage = bopt$shrinkage, 
+									bag.fraction = bopt$bag.fraction,
+									train.fraction = bopt$train.fraction, 
+									verbose = FALSE)
+				)["elapsed"]
+				n.trees.opt <- gbm::gbm.perf(temp, method = bopt$perf.method)
+		
+				if (n.trees.opt <= 3000) {
+					bopt$shrinkage <- bopt$shrinkage / 5
+				} else if (n.trees.opt >= 10000) {
+					bopt$shrinkage <- bopt$shrinkage * 2
+				} else {
+					if (n.trees.opt >= bopt$n.trees) {
+						bopt$n.trees <- 2 * bopt$n.trees
+					} else break
+				}
+			}
+		)["elapsed"]
+		bsdms$comp_time <- comp_time1
+		bsdms$comp_time_total <- comp_time2
+	
+		if (its >= 10) stop(runID, " did not reach convergence")
+
+		temp[["n.trees.opt"]] <- n.trees.opt
+		bsdms$m <- temp
+	}
+
+	# Make the predictions
+	if (!is.null(bsdms$m)) {
+		if (runID["models"] == "MaxEntP") {
+			# predictions
+			preds <- read.csv(file.path(dir_out_MEP, paste0(runID["types"], "_predict.csv")))[, 3]
+	
+			# remove tmp dir
+			unlink(dir_temp_MEP, recursive = TRUE)
+		} else {
+			preds <- make_prediction(bsdms$m, dat_pred)
+		}
+		
+		# Evaluate models and get cutoffs
+		pred.eval <- preds[id_pred == "eval"]
+		pred.obs <- preds[id_pred == "obs"]
+		bsdms$cutoff <- get.cutoff(pred = pred.obs, obs = data.tmp[,1],
+								 pred.eval = pred.eval, obs.eval = eval.tmp[,1],
+								 method = eval_disc.methods)	
+		
+		# Predict across regions
+		bsdms$Proj <- lapply(names(new_regions), function(ir) preds[id_pred == ir])
+		names(bsdms$Proj) <- names(new_regions)
+		
+		# Get values for response curves
+		bsdms$ResponseCurvePreds <- lapply(seq_along(new_regions), function(ir) {
+										temp <- lapply(paste0(names(new_regions)[ir], "_rc_", names(dat_curves[[ir]])), function(x) preds[id_pred == x]) 
+										arrange.response.plot2(show.variables = names(dat_curves[[ir]]),
+																modelName = runID[["models"]],
+																xdat = dat_curves[[ir]],
+																ydat = temp)
+									})
+		names(bsdms$ResponseCurvePreds) <- names(new_regions)
+	}
+	
+
+	# Return result
+	bsdms
 })
 
 
-#fit model, get cutoff, and evaluation statistics
-calc_sdms <- compiler::cmpfun(function(type, error, model, bdat, bopt, eval_disc.methods){
-  type <<- type	 #Need to pass 'type' because of model formulae
-  error <<- error
-  data.tmp <- cbind(bdat$resp.var,bdat$expl.var)
-  colnames(data.tmp)[1] <- type
-  eval.tmp <- cbind(bdat$eval.resp.var,bdat$eval.expl.var)
-  colnames(eval.tmp)[1] <- type
-  
-  bsdms <- list()
-  
-  if(model == 'GLM'){
-    bsdms$comp_time <- system.time(
-		temp <- stats::glm(formula = bopt$myFormula,
-							family = bopt$family,
-							data = data.tmp,
-							#mustart = rep(bopt$mustart,nrow(data.tmp)),
-							control = bopt$control,
-							x = FALSE, y = FALSE))["elapsed"]
-    bsdms$m <- temp
-    bsdms$DEV <- deviance(bsdms$m)
-    
-  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1])
-  	pred.obs <- fitted(bsdms$m)
-  }
-  
-  if(model == 'GAM'){
-    bsdms$comp_time <- system.time(
-		temp <- mgcv::gam(formula = bopt$myFormula,
-                       family = bopt$family,
-                       data = data.tmp,
-                       control = bopt$control))["elapsed"]
-    bsdms$m <- temp
-    bsdms$DEV <- deviance(bsdms$m)
-    
-  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1])
-  	pred.obs <- fitted(bsdms$m)
-  }
-  
-  if (model == "MaxEnt") {
-  	# http://www.nactem.ac.uk/tsuruoka/maxent/
-#  	warning("This is the Tsuruoka and not the Phillips implementation of MaxEnt!")
-  	
-#  	if (any(grepl("I(MinTScaled * LnPScaled)", as.character(attr(terms(bopt$myFormula), "variables")), fixed = TRUE))) {
-#  		# with interaction
-#  		feature_matrix <- with(data.tmp, data.frame(LnP = LnP, MinT = MinT, LnP_x_MinT = MinTScaled * LnPScaled))
-#  	} else { #no interaction
-#  		feature_matrix <- with(data.tmp, data.frame(LnP = LnP, MinT = MinT))
-#  	}
-  	
-    bsdms$comp_time <- system.time(
-		temp <- maxent::maxent(feature_matrix = data.tmp[, c("LnP", "MinT")],
-							code_vector = as.factor(data.tmp[, 1]),
-							l1_regularizer = bopt$l1_regularizer,
-							l2_regularizer = bopt$l2_regularizer,
-							use_sgd = bopt$use_sgd,
-							set_heldout = bopt$set_heldout,
-							verbose = FALSE))["elapsed"]
-  	bsdms$m <- temp
-    bsdms$DEV <- NA
-    
-  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, c("LnP", "MinT")])
-  	pred.obs <- make_prediction(bsdms$m, data.tmp[, c("LnP", "MinT")])
-  }
-  
-  if (model == "RF") {
-    bsdms$comp_time <- system.time(
-		temp <- randomForest::randomForest(x = data.tmp[, c("LnP", "MinT")], y = as.factor(data.tmp[, 1]), #classification random.forest: y must be a factor
-# 										formula = bopt$myFormula, #For large data sets, especially those with large number of variables, calling randomForest via the formula interface is not advised: There may be too much overhead in handling the formula.
-#  										data = data.tmp,
-  										ntree = bopt$ntree,
-  										mtry = bopt$mtry,
-  										importance = FALSE,
-  										norm.votes = TRUE,
-#										strata = factor(c(0, 1)), # NOTE: biomod2 sets this, but it has no influence on result
-  										nodesize = bopt$nodesize,
-  										maxnodes = bopt$maxnodes))["elapsed"]
-  	
-  	bsdms$m <- temp
-  	bsdms$DEV <- NA
-    
-  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, c("LnP", "MinT")])
-  	pred.obs <- make_prediction(bsdms$m, data.tmp[, c("LnP", "MinT")])
-  }
-
-  if (model == "BRT") {
-    bsdms$comp_time <- system.time(
-		temp <- gbm::gbm(formula = bopt$myFormula,
-  						distribution = "bernoulli",
-  						data = data.tmp,
-            			n.trees = bopt$n.trees, 
-            			cv.folds = bopt$cv.folds, # if cv.folds = 1, then bug in gbm::gbm is expressed and 'p' is not found: as.list(body(gbm::gbm))[[34]] should be {if (cv.folds > 1) gbm.obj$cv.fitted <- p}
-            			interaction.depth = bopt$interaction.depth, 
-            			n.minobsinnode = bopt$n.minobsinnode,
-            			shrinkage = bopt$shrinkage, 
-            			bag.fraction = bopt$bag.fraction,
-            			train.fraction = bopt$train.fraction, 
-            			verbose = FALSE))["elapsed"]
-  	bsdms$m <- temp
-  	bsdms$DEV <- NA
-    
-  	pred.eval <- make_prediction(bsdms$m, eval.tmp[, -1])
-  	pred.obs <- make_prediction(bsdms$m, data.tmp[, -1])
-  }
-
-  
-  ##evaluate models and get cutoffs
-  bsdms$cutoff <- get.cutoff(pred = pred.obs, obs = data.tmp[,1],
-                             pred.eval = pred.eval, obs.eval = eval.tmp[,1],
-                             method = eval_disc.methods)	
-  
-  ##return list
-  bsdms
-})
-
-
-# Project the SDMs based on one region to the others
-make_projection <- compiler::cmpfun(function(bsdm, newData, projName = ""){
-  preds <- make_prediction(bsdm, newData)
-  list(projName = projName, pred = as.integer(1000 * round(preds, 3)))
-})
 
 
 get.balanced.sample <- compiler::cmpfun(function(obs,samp){
@@ -547,37 +706,6 @@ make.SDM <- compiler::cmpfun(function(i){
 		model <- runRequests[i, "models"]
 		error <- runRequests[i, "errors"]
 
-		#we fixed: predictorsN == 10
-		DSplit <- 100 * (1 - 1/(1 + sqrt(predictorsN - 1))) #Fielding, A. H., and J. F. Bell. 1997. A review of methods for the assessment of prediction errors in conservation presence/absence models. Environmental Conservation 24:38-49.
-
-		#Get data
-		ibase <- (climData[, "region"] == baseRegion)
-		N <- sum(ibase)
-		samp <- sample(x=1:N, size=trunc(N*DSplit/100), replace=FALSE)
-
-		if(equalSamples)
-			samp <- get.balanced.sample(obsData[[paste(type,error,sep="_")]][ibase, runRequests[i, 'realizations']],samp)
-
-		bdat <- set_Data(type = type,
-					   error = error,
-					   obs = obsData[[paste(type,error,sep="_")]][ibase, runRequests[i, 'realizations']],
-					   dat = climData[ibase, ],
-					   samp = samp,
-					   run = runRequests[i, 'realizations'])
-  
-		#Build models -- full data
-		bresM <- vector(mode="list", length=6)
-		names(bresM) <- c("runID", "centerMeans", "SDMs", "Proj", "samp", "ResponseCurvePreds")
-		bresM$runID <- runRequests[i, ]
-		bresM$centerMeans <- centerMeansData
-		bresM$samp <- samp
-
-		bopt <- set_options(model = model, level=  mlevels[[mlevel]])
-
-		bresM$SDMs <- calc_sdms(type = type, error = error, model = model, bdat = bdat, bopt = bopt, eval_disc.methods = eval_disc.methods) 
-
-		#Project model onto all regions and for response curve plots
-		bresM$Proj <- bresM$ResponseCurvePreds <- vector(mode="list", length=length(regions))
 		orig.variables <- names(climData[,-(1:3)])
 		if(length(temp <- grep("Scaled", orig.variables)) > 0){
 			scaled.variables <- orig.variables[temp]
@@ -585,49 +713,67 @@ make.SDM <- compiler::cmpfun(function(i){
 		} else {
 			scaled.variables <- NULL
 		}
- 
-		for(ir in seq_along(regions)){
-			iregion <- (climData[, "region"] == regions[ir])
-			newData <- climData[iregion, c("LnP", "LnPScaled", "MinT", "MinTScaled")]
-			#Project model onto region
-			bresM$Proj[[ir]]$Proj <- make_projection(bsdm = bresM$SDMs$m,
-													 newData = newData,
-													 projName = paste0(model, "_region", regions[ir]))		
-	
-		#Prepare response curve plot predictions
-		bresM$ResponseCurvePreds[[ir]] <- try(our.response.plot2(
-			modelObj=bresM$SDMs$m, modelName=model,
-			Data=newData,
-			orig.variables=orig.variables,
-			scaled.variables=scaled.variables,
-			centerMeans=bresM$centerMeans,
-			data_species=obsData[[paste(type,error,sep="_")]][iregion, runRequests[i, 'realizations']],
-			fixed.var.metric="mean") #mean was proposed in the 'evaluation strip' by Elith et al. 2005
-			, silent=TRUE)
-		}
-  
-  
-  
-		#clean fitted model objects, i.e., it will NOT work with predict.glm resp. predict.gam
-		bresM$SDMs$m <- if (identical(model, "GLM")) {
-							bresM$SDMs$m$family <- bresM$SDMs$m$family[c("family", "link")]
-							bresM$SDMs$m$class <- "glm"
-							bresM$SDMs$m[c('coefficients', 'family', 'df.null', 'df.residual', 'class')]
-						} else if (identical(model, "GAM")) { # gam objects inherit from classes glm and lm
-							bresM$SDMs$m$family <- bresM$SDMs$m$family[c("family", "link")]
-							bresM$SDMs$m$class <- "gam"
-							bresM$SDMs$m[c('coefficients', 'family', 'edf', 'class')]
-						} else if (identical(model, "MaxEnt")) {
-							bresM$SDMs$m$class <- "maxent"
-							bresM$SDMs$m
-						} else if (identical(model, "RF")) {
-							bresM$SDMs$m$class <- "randomForest"
-							bresM$SDMs$m[c("type", "importance", "ntree", "mtry", "confusion", "class")]
-						} else if (identical(bresM$SDMs$m, "BRT")) {
-							bresM$SDMs$m$class <- "gbm"
-							bresM$SDMs$m[c("initF", "n.trees", "distribution", "interaction.depth", "class")]
-						}
 		
+		#we fixed: predictorsN == 10
+		DSplit <- 100 * (1 - 1/(1 + sqrt(predictorsN - 1))) #Fielding, A. H., and J. F. Bell. 1997. A review of methods for the assessment of prediction errors in conservation presence/absence models. Environmental Conservation 24:38-49.
+
+		#Get data
+		i_regions <- lapply(regions, function(x) climData[, "region"] == x)
+		names(i_regions) <- paste0("region", regions)
+		obs <- obsData[[paste(type,error,sep="_")]][, runRequests[i, 'realizations']]
+		
+		N <- sum(i_regions[[baseRegion]])
+		samp <- sample(x=1:N, size=trunc(N*DSplit/100), replace=FALSE)
+
+		if(equalSamples)
+			samp <- get.balanced.sample(obs[i_regions[[baseRegion]]],samp)
+
+		bdat <- set_Data(type = type,
+					   error = error,
+					   obs = obs[i_regions[[baseRegion]]],
+					   dat = climData[i_regions[[baseRegion]], ],
+					   samp = samp,
+					   run = runRequests[i, 'realizations'])
+  
+		#Build models -- full data
+		bresM <- list()
+		bresM[["runID"]] <- runRequests[i, ]
+		bresM[["centerMeans"]] <- centerMeansData
+		bresM[["samp"]] <- samp
+
+		bopt <- set_options(model = model, level = mlevels[[mlevel]])
+
+		temp <- try(calc_sdms_and_predict(runID = bresM[["runID"]], bdat = bdat, bopt = bopt,
+					new_regions = i_regions,
+					new_data = cbind(obs, climData),
+					scaled.variables = scaled.variables, orig.variables = orig.variables,
+					centerMeans = bresM[["centerMeans"]],
+					eval_disc.methods = eval_disc.methods,
+					dir_temp = dirname(ftemp)), silent = TRUE)
+
+		if (!inherits(temp, "try-error")) {
+			bresM <- modifyList(bresM, temp)
+
+			#clean fitted model objects, i.e., it will NOT work with predict.glm etc.
+			bresM[["m"]] <- if (identical(model, "GLM")) {
+								bresM[["m"]]$family <- bresM[["m"]]$family[c("family", "link")]
+								bresM[["m"]][c('coefficients', 'family', 'df.null', 'df.residual')]
+							} else if (identical(model, "GAM")) { # gam objects inherit from classes glm and lm
+								bresM[["m"]]$family <- bresM[["m"]]$family[c("family", "link")]
+								bresM[["m"]][c('coefficients', 'family', 'df.null', 'df.residual', 'edf')]
+							} else if (identical(model, "MaxEnt")) {
+								bresM[["m"]]
+							} else if (identical(model, "MaxEntP")) {
+								bresM[["m"]]
+							} else if (identical(model, "RF")) {
+								bresM[["m"]]$class <- "randomForest"
+								bresM[["m"]][c("type", "importance", "ntree", "mtry", "confusion", "OOB")]
+							} else if (identical(model, "BRT")) {
+								bresM[["m"]][c("initF", "n.trees.opt", "distribution", "interaction.depth")]
+							}
+			bresM[["class"]] <- switch(EXPR = model, GLM = "glm", GAM = "gam", MaxEnt = "maxent", MaxEntP = "MaxEntP", RF = "randomForest", BRT = "gbm")
+		}
+				
 		# Memoize the results
 		saveRDS(bresM, ftemp)
 	}  
@@ -658,7 +804,7 @@ calc_eval_regions <- compiler::cmpfun(function(i) {
 		} else {
 			for (ir in seq_along(regions)) {
 				obs  <- obsData[[paste(runRequests[i,'types'], runRequests[i,'errors'], sep="_")]][, runRequests[i,'realizations']][climData[,'region'] == ir]
-				pred <- bresM$Proj[[ir]]$Proj$pred / 1000
+				pred <- bresM$Proj[[ir]] / 1000
 
 				res[["discrete"]][ir, eval_disc.methods, stat.methods] <- get.cutoff(pred = pred, obs = obs,
 																					   pred.eval = pred, obs.eval = obs,
@@ -828,8 +974,8 @@ eval3.SDMs <- compiler::cmpfun(function(i){
 		temp.Dev <- array(NA, dim=temp)
 
 		for (j in 1:nrow(ids)){
-			temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- bsub[[j]]$SDMs$cutoff[eval_disc.methods, stat.methods]
-			temp <- bsub[[j]]$SDMs$DEV
+			temp.Eval[,, ids[j, "realizations"], ids[j, "run"]] <- bsub[[j]]$cutoff[eval_disc.methods, stat.methods]
+			temp <- bsub[[j]]$DEV
 			temp.Dev[ids[j, "realizations"], ids[j, "run"]] <- if (is.null(temp)) NA else temp
 		}
 
@@ -895,17 +1041,18 @@ eval3.SDMs <- compiler::cmpfun(function(i){
 ## Functions to estimate model complexity
 get_complexity <- compiler::cmpfun(function(i) {	
 	bresM <- try(readRDS(file = get_temp_fname(runRequests[i, ], runRequestIDs[i])), silent = TRUE)
-	res <- rep(NA, 2)
+	res <- rep(NA, 3)
 	
 	if (!inherits(bresM, "try-error")) {
 		res[1] <- 	if(runRequests[i, "models"] == "GAM") {
-						sum(bresM$SDMs$m$edf)
+						sum(bresM$m$edf)
 					} else if(runRequests[i, "models"] == "GLM") {
-						with(bresM$SDMs$m, df.null - df.residual + 1)
+						with(bresM$m, df.null - df.residual + 1)
 					} else {
 						NA
 					}
-		res[2] <- bresM$SDMs$comp_time
+		res[2] <- bresM$comp_time
+		res[3] <- if (is.null(bresM$comp_time_total)) res[2] else bresM$comp_time_total
 	}
 
 	res
@@ -1167,7 +1314,22 @@ map_distributions <- function(Obs, Fit, XY, model, fun = mean, maxPred = 1000, f
   }
 }
 
-our.response.plot2 <- compiler::cmpfun(function(modelObj, modelName, Data, orig.variables, scaled.variables=NULL, centerMeans, data_species, fixed.var.metric = 'mean'){
+
+arrange.response.plot2 <- compiler::cmpfun(function(show.variables, modelName, xdat, ydat) {
+	list.out <- NULL
+	for (i in seq_along(show.variables)) {
+		# 5. Storing results
+		list.out[[i]] <- data.frame(xdat[[i]][["plot_data"]], ydat[[i]])
+		colnames(list.out[[i]]) <- c(show.variables[i], modelName)
+	}
+	names(list.out) <- show.variables
+	
+	list.out
+})
+
+
+
+pred.response.plot2 <- compiler::cmpfun(function(data_species, data_env, orig.variables, scaled.variables=NULL, centerMeans, fixed.var.metric = 'mean'){
 ##biomod2::response.plot2:
 #	- doesn't find loaded models even though they were loaded properly
 #	--> our own version  loads the model instead of assuming that the models are loaded
@@ -1186,23 +1348,23 @@ our.response.plot2 <- compiler::cmpfun(function(modelObj, modelName, Data, orig.
 
 	nb.pts <- 100
 	if(is.null(data_species)){
-		data_species <- rep(1,nrow(Data))
+		data_species <- rep(1,nrow(data_env))
 	} else {
 		data_species[data_species!=1 | is.na(data_species)] <- 0
 	}
 
 
 	# 2. build function outputs
-	factor_id <- which(sapply(Data,is.factor))
+	factor_id <- which(sapply(data_env,is.factor))
 	list.out <- list()
 
 	# Create a ranged data table
-	ref_table <- Data[1,,drop=F]
+	ref_table <- data_env[1,,drop=F]
 	rownames(ref_table) <- NULL
 
-	for(i in 1:ncol(Data)){
-		temp <- Data[data_species==1,i]
-		if(is.numeric(Data[,i])){
+	for(i in 1:ncol(data_env)){
+		temp <- data_env[data_species==1,i]
+		if(is.numeric(data_env[,i])){
 			ref_table[,i] <- switch(fixed.var.metric,
 								  mean = mean(temp),
 								  median = median(temp),
@@ -1215,39 +1377,31 @@ our.response.plot2 <- compiler::cmpfun(function(modelObj, modelName, Data, orig.
 		}
 	}
 
-	for(vari in show.variables){
+	for (i in seq_along(show.variables)) {
 		# creating Tmp data
-		if(is.factor(Data[,vari])){
-			pts.tmp <- as.factor(levels(Data[,vari]))
+		if (is.factor(data_env[, show.variables[i]])) {
+			pts.tmp <- as.factor(levels(data_env[, show.variables[i]]))
+			pts.tmp.orig <- NULL
 		} else {
-			pts.tmp <- seq(min(Data[,vari]), max(Data[,vari]), length.out=nb.pts)
-			temp <- grep(iorig <- sub("Scaled", "", vari), names(centerMeans))
+			pts.tmp <- seq(min(data_env[, show.variables[i]]), max(data_env[, show.variables[i]]), length.out = nb.pts)
+			temp <- grep(iorig <- sub("Scaled", "", show.variables[i]), names(centerMeans))
 			pts.tmp.orig <- if(isScaled) pts.tmp + centerMeans[temp] else NULL
 		}
 
-		Data.r.tmp <- eval(parse(text=paste("cbind(",vari,"=pts.tmp,ref_table[,-which(colnames(ref_table)==vari),drop=F])",sep="")))
+		Data.r.tmp <- eval(parse(text=paste("cbind(", show.variables[i], "=pts.tmp,ref_table[,-which(colnames(ref_table)==show.variables[i]),drop=F])",sep="")))
 		Data.r.tmp <- Data.r.tmp[,colnames(ref_table),drop=F]
 		if(length(factor_id)){
 			for(f in factor_id){
-				Data.r.tmp[,f] <- factor(as.character(Data.r.tmp[,f]), levels=levels(Data[,f]))
+				Data.r.tmp[,f] <- factor(as.character(Data.r.tmp[,f]), levels=levels(data_env[,f]))
 			}
 		}
 		if(!is.null(pts.tmp.orig)) Data.r.tmp[, iorig] <- pts.tmp.orig
 
-		# 2. make projections 
-		proj.tmp <- make_projection(bsdm = modelObj, newData = Data.r.tmp)$pred	
-
-		# 5. Storing results
-		if(length(list.out[[vari]]) == 0){ #init
-			eval(parse(text=paste("list.out[['",vari,"']] <- data.frame(",vari,"=pts.tmp, ",modelName,"=proj.tmp)",sep="")))
-		} else {
-			eval(parse(text=paste("list.out[['",vari,"']] <- cbind(list.out[['",vari,"']],",modelName,"=proj.tmp)",sep="")))
-		}
-
+		list.out[[i]] <- list(new_data = Data.r.tmp, plot_data = pts.tmp)
 	}
+	names(list.out) <- show.variables
 
-	invisible(list.out)
-
+	list.out
 })
 
 
@@ -1453,10 +1607,10 @@ make2.figures <- function(i, type, error, mlevel, model, runID, bsub){
   for(ir in seq_along(regions)){
     coordsXY <- climData[(climData[, "region"] == regions[ir]), c("x", "y")]
     
-    FittedData <- ObsData <- matrix(NA, nrow=length(bsub[[1]]$Proj[[ir]]$Proj$pred), ncol=nrow(ids))
+    FittedData <- ObsData <- matrix(NA, nrow=length(bsub[[1]]$Proj[[ir]]), ncol=nrow(ids))
     respCurvePreds <- vector(mode="list", length=nrow(ids))
     for(rr in 1:nrow(ids)){
-      FittedData[, rr] <- bsub[[rr]]$Proj[[ir]]$Proj$pred
+      FittedData[, rr] <- bsub[[rr]]$Proj[[ir]]
       ObsData[, rr] <- obsData[[paste(type,error,sep="_")]][(climData[, "region"] == regions[ir]), ids[rr, 'realizations']]
       respCurvePreds[[rr]] <- bsub[[rr]]$ResponseCurvePreds[[ir]]
     }

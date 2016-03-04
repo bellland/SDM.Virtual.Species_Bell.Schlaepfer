@@ -36,11 +36,13 @@ computer <- "Daniel" # "Dave"
 if (computer == "Dave") {
 	dir.prj <- "E:/Work_Share_Dave_SDM&ResponseCurves"
 	path.functions <-"E:/Dropbox/Work_Share_Dave_SDM&ResponseCurves/BIOMOD2"
+	path_to_MaxEntP <- path.functions
 	dir.big <- dir.prj
 } else if (computer == "Daniel") {
 	dir.prj <- "~/Dropbox/Work_Stuff/2_Research/200907_UofWyoming_PostDoc/Product21_SDM_AsymmetryResponseCurve/3_Simulations"
 	path.functions <- file.path(dir.prj, "code")
-	dir.big <- "~/Downloads/Product21_SDM_AsymmetryResponseCurve"
+	path_to_MaxEntP <- path.functions
+	dir.big <- "~/Downloads/BigData/Product21_SDM_AsymmetryResponseCurve"
 } else stop(computer, " is not implemented")
 
 dir.dat <- file.path(normalizePath(dir.prj), "inst", "extdata")
@@ -56,7 +58,7 @@ temp <- lapply(c(dir.sdm, dir.maps, dir.figs, dir.tables), function(x) dir.creat
 
 
 ## Settings
-num_cores <- 22
+num_cores <- 23
 parallel_backend <- "parallel" # "parallel" (here, uses sockets on windows and forks on unix systems) or "mpi" (requiring a MPI installed)
 fflag <- paste0("v2_", date.run)
 filename.runRequests <- paste0("runSetup_", fflag, ".RData")
@@ -72,7 +74,7 @@ baseRegion <- 2 #NorthWest
 regions <- 1:4
 types <- c("AIF", "SCT", "SIF", "SIT")
 mlevels <- list(woInt=c("linear", "squared"), wInt=c("linear", "squared", "interaction"))
-sdm.models <- c("GLM", "GAM", "MaxEnt", "RF", "BRT")
+sdm.models <- c("GLM", "GAM", "MaxEntP", "RF", "BRT")
 eval_disc.methods <- c('TSS','ROC','KAPPA')
 eval_cont.methods <- c('RMSE', 'MAE')
 errors <- c("binom","binom+res","spatial","spatial+res")
@@ -128,60 +130,6 @@ runFolders <- apply(unique(runEvals[, c("models", "types")]), 1, paste, collapse
 # nrow(runRequests) / length(runFolders) # we shouldn't have too many files per folder
 temp <- lapply(runFolders, function(x) dir.create(path = file.path(dir.sdm, x), showWarnings=FALSE, recursive=TRUE))
 
-
-######
-print(Sys.time())
-print(sessionInfo())
-
-####### Set up parallel environment
-#if(!interactive()){
-num_cores <- min(num_cores, parallel::detectCores() - 1)
-
-if(identical(parallel_backend, "mpi")){
-  stopifnot(require("Rmpi"))
-  
-  .Last <- function() { #Properly clean up mpi before quitting R (e.g., at a crash)
-    if(is.loaded("mpi_initialize") && exists("mpi.comm.size")){
-      if (mpi.comm.size(1) > 0) mpi.close.Rslaves()
-      .Call("mpi_finalize")
-    }
-  }
-  
-  mpi.spawn.Rslaves(nslaves=num_cores)
-  
-  exportObjects <- function(allObjects) {
-    for(obj in 1:length(allObjects)) {
-      bcast.tempString <- allObjects[obj]
-      bcast.tempValue <- try(eval(as.name(allObjects[obj])))
-      if(!inherits(bcast.tempValue, "try-error")){
-        mpi.bcast.Robj2slave(bcast.tempString)
-        mpi.bcast.Robj2slave(bcast.tempValue)
-        mpi.bcast.cmd(cmd=try(assign(bcast.tempString, bcast.tempValue)))
-      } else {
-        print(paste(obj, bcast.tempString, "not successful"))
-      }
-    }
-  }
-  
-} else if(identical(parallel_backend, "parallel")){
-  
-	cl  <- if (.Platform$OS.type == "unix") {
-				makeCluster(num_cores, type = "FORK", outfile = "log_sdm.txt")
-			} else if (.Platform$OS.type == "windows") {
-				makeCluster(num_cores, type = "PSOCK", outfile = "log_sdm.txt")
-			} else {
-				stop("Running this code on this type of platform is currently not implemented.")
-			}
-  
-  .Last <- function() { #Properly clean up cluster before quitting R (e.g., at a crash)
-    if(exists("stopCluster") && exists("cl")){
-      stopCluster(cl)	#clean up cluster
-    }
-  }
-} else {
-  stop("No available parallel backend specified.")
-}	
-#}
 
 ####### Functions
 
@@ -244,6 +192,60 @@ if (action == "continue" && file.exists(ftemp)) {
 }
 
 
+####### Set up parallel environment
+#if(!interactive()){
+num_cores <- min(num_cores, parallel::detectCores() - 1)
+
+if(identical(parallel_backend, "mpi")){
+  stopifnot(require("Rmpi"))
+  
+  .Last <- function() { #Properly clean up mpi before quitting R (e.g., at a crash)
+    if(is.loaded("mpi_initialize") && exists("mpi.comm.size")){
+      if (mpi.comm.size(1) > 0) mpi.close.Rslaves()
+      .Call("mpi_finalize")
+    }
+  }
+  
+  mpi.spawn.Rslaves(nslaves=num_cores)
+  
+  exportObjects <- function(allObjects) {
+    for(obj in 1:length(allObjects)) {
+      bcast.tempString <- allObjects[obj]
+      bcast.tempValue <- try(eval(as.name(allObjects[obj])))
+      if(!inherits(bcast.tempValue, "try-error")){
+        mpi.bcast.Robj2slave(bcast.tempString)
+        mpi.bcast.Robj2slave(bcast.tempValue)
+        mpi.bcast.cmd(cmd=try(assign(bcast.tempString, bcast.tempValue)))
+      } else {
+        print(paste(obj, bcast.tempString, "not successful"))
+      }
+    }
+  }
+  
+} else if(identical(parallel_backend, "parallel")){
+  
+	cl  <- if (.Platform$OS.type == "unix") {
+				makeCluster(num_cores, type = "FORK", outfile = "log_sdm.txt")
+			} else if (.Platform$OS.type == "windows") {
+				makeCluster(num_cores, type = "PSOCK", outfile = "log_sdm.txt")
+			} else {
+				stop("Running this code on this type of platform is currently not implemented.")
+			}
+  
+  .Last <- function() { #Properly clean up cluster before quitting R (e.g., at a crash)
+    if(exists("stopCluster") && exists("cl")){
+      stopCluster(cl)	#clean up cluster
+    }
+  }
+} else {
+  stop("No available parallel backend specified.")
+}	
+#}
+
+######
+print(Sys.time())
+print(sessionInfo())
+
 
 ## Build SDMs
 if (do.SDMs) {
@@ -252,9 +254,9 @@ if (do.SDMs) {
   libraries <- c("mgcv", "randomForest", "gbm", "maxent")
   list.export <- c("libraries", "climData", "obsData", "probData", "centerMeansData", 
                    "runRequests", "runRequestIDs", "baseRegion", "regions", "mlevels", "sdm.models", 
-                   "eval_disc.methods", "predictorsN", "make.SDM", "set_Data", "calc_sdms", 
-                   "set_options", "make_prediction", "make_projection","dir.sdm", "dir.in", "equalSamples",
-                   "get.balanced.sample","get.cutoff", "our.response.plot2", "get_temp_fname")
+                   "eval_disc.methods", "predictorsN", "make.SDM", "set_Data", "calc_sdms_and_predict", 
+                   "set_options", "make_prediction", "make_integer","dir.sdm", "dir.in", "path_to_MaxEntP", "equalSamples",
+                   "get.balanced.sample","get.cutoff", "pred.response.plot2", "arrange.response.plot2", "get_temp_fname")
 
 	# determine which SDMs have already been calculated and stored to disk
 	xt <- seq_len(nrow(runRequests))
@@ -279,6 +281,17 @@ if (do.SDMs) {
 			xt <- xt[-ifb]
 		}
 	}
+	
+	if ("MaxEntP" %in% sdm.models) {
+		cond1 <- file.exists(file.path(path_to_MaxEntP, "maxent.jar"))
+		temp <- system2("java", args = "-version", stdout = TRUE, stderr = TRUE)
+		cond2 <- any(grepl("java", temp)) && any(grepl("Runtime Environment", temp))
+		
+		if (!cond1 || !cond2) {
+			message("Phillip's MaxEnt java program cannot be found; MaxEntP request will not be run")
+			xt <- xt[!(runRequests[xt, "models"] == "MaxEntP")]
+		}
+	}
 
   # call make.SDM
   if(length(xt) > 0){
@@ -295,8 +308,8 @@ if (do.SDMs) {
 		  clusterExport(cl, list.export)
 		  clusterEvalQ(cl, lapply(libraries, FUN=require, character.only=TRUE))
 
-		  idones <- parLapply(cl, xt, function(i) try(make.SDM(i), silent=TRUE))
-
+		  idones <- parLapplyLB(cl, xt, function(i) try(make.SDM(i), silent=TRUE)) # we need load-balancing because MaxEntP is much slower than the other models
+warnings()
 		  clusterEvalQ(cl, rm(list=ls()))
 		  clusterEvalQ(cl, gc())
 	  }
@@ -307,26 +320,34 @@ if (do.SDMs) {
   
 
   # Get data from disk
-  bres <- list()
-  for (i in seq_len(nrow(runRequests))) {
-  	bres[[i]] <- try(readRDS(file = get_temp_fname(runRequests[i, ], runRequestIDs[i])), silent = TRUE)
+  if (FALSE) {
+	  bres <- list()
+	  for (i in seq_len(nrow(runRequests))) {
+		bres[[i]] <- try(readRDS(file = get_temp_fname(runRequests[i, ], runRequestIDs[i])), silent = TRUE)
+	  }
+  	  goodRuns <- sapply(bres, FUN=function(l) !inherits(l, "try-error"))
+      bres <- bres[goodRuns]
+      temp <- t(sapply(bres, FUN=function(l) l$runID))
+      runIDs <- na.exclude(match(apply(temp, 1, paste, collapse="_"), table=apply(runRequests, MARGIN=1, FUN=function(x) paste(trimws(x), collapse="_"))))
+
+	  # print(object.size(bres), units = "GB") # 25.6 Gb for length(bres) == 320000
+	  temp <- try(saveRDS(bres, file = file.path(dir.sdm, filename.saveSDMs)), silent = TRUE)
+	  if (inherits(temp, "try-error")) {
+	    warning("Saving the object 'bres' to disk failed likely because of insufficient memory: the size of 'bres' is ", print(object.size(bres), units = "GB"), " and up to twice as much memory is required: ", temp)
+      } else {
+        rm(bres)
+      }
   }
   
   #Identify runs
-  goodRuns <- sapply(bres, FUN=function(l) !inherits(l, "try-error"))
-  if(any(!goodRuns)) print(bres[[which(!goodRuns)[1]]])
+  goodRuns <- !sapply(seq_len(nrow(runRequests)), function(i) inherits(try(readRDS(file = get_temp_fname(runRequests[i, ], runRequestIDs[i])), silent = TRUE), "try-error"))
   if(all(!goodRuns)) stop(paste(Sys.time(), ": No SDM successful"))
   print(paste(Sys.time(), ":", sum(goodRuns), "out of", length(goodRuns), "SDMs successful"))
-  bres <- bres[goodRuns]
-  temp <- t(sapply(bres, FUN=function(l) l$runID))
   #runIDs = index for which row of runRequests corresponds to elements of bres
   runIDs <- na.exclude(match(apply(temp, 1, paste, collapse="_"), table=apply(runRequests, MARGIN=1, FUN=function(x) paste(trimws(x), collapse="_"))))
-  
-  # print(object.size(bres), units = "GB") # 25.6 Gb for length(bres) == 320000
   saveRDS(runIDs, file = file.path(dir.sdm, filename.saveRunIDs))
-  temp <- try(saveRDS(bres, file = file.path(dir.sdm, filename.saveSDMs)), silent = TRUE)
-  if (inherits(temp, "try-error")) warning("Saving the object 'bres' to disk failed likely because of insufficient memory: the size of 'bres' is ", print(object.size(bres), units = "GB"), " and up to twice as much memory is required: ", temp)
-  
+
+
   # Model object sizes
   if (FALSE) {
 	  msize <- data.frame(model = sapply(bres, function(x) x$runID$model),
@@ -346,12 +367,11 @@ if (do.SDMs) {
 			cat(sdm.models[im], "our object: \n")
 			print_elem_size(bres[[im]])
 			cat(sdm.models[im], "model object: \n")
-			print_elem_size(bres[[im]]$SDMs$m)
+			print_elem_size(bres[[im]][["m"]])
 			cat("\n")
 		}
   }
 
-  rm(bres)
   print(paste(Sys.time(), ": SDMs done"))
 }
 
@@ -524,26 +544,22 @@ if (do.Complexity) {
 			clusterEvalQ(cl, gc())
 		} else stop("this is not implemented 2")
 		
-		temp <- matrix(NA, nrow(runRequests), ncol = 2, dimnames = list(NULL, c("edf", "comp_time_s")))
+		temp <- matrix(NA, nrow(runRequests), ncol = 3, dimnames = list(NULL, c("edf", "comp_time_s", "comp_time_total_s")))
 		temp[runIDs, ] <- t(idones)
 		
 		complexity <- cbind(runRequests, temp)
 		saveRDS(complexity, file = cfile)
 	}
-
-	plot_complexity(preds = c("models", "mlevels", "types", "errors"),
-					y = complexity[, "edf"], ylab = "Degrees of Freedom", fname = "Complexity_DF1.png")
-	plot_complexity(preds = c("models", "mlevels", "types"),
-					y = complexity[, "edf"], ylab = "Degrees of Freedom", fname = "Complexity_DF2.png")
-	plot_complexity(preds = c("models", "mlevels"),
-					y = complexity[, "edf"], ylab = "Degrees of Freedom", fname = "Complexity_DF3.png")
 	
-	plot_complexity(preds = c("models", "mlevels", "types", "errors"),
-					y = complexity[, "comp_time_s"], ylab = "Computation time (s)", fname = "Complexity_CompTime1.png")
-	plot_complexity(preds = c("models", "mlevels", "types"),
-					y = complexity[, "comp_time_s"], ylab = "Computation time (s)", fname = "Complexity_CompTime2.png")
-	plot_complexity(preds = c("models", "mlevels"),
-					y = complexity[, "comp_time_s"], ylab = "Computation time (s)", fname = "Complexity_CompTime3.png")
+	resp <- colnames(complexity) 
+	pred_vars <- list(c("models", "mlevels", "types", "errors"), c("models", "mlevels", "types"), c("models", "mlevels"))
+	ylabs <- list("Degrees of Freedom", "Computation time (s)", "Computation time (s)")
+	fnames <- list(paste0("Complexity_DF", seq_along(pred_vars), ".png"),
+					paste0("Complexity_CompTime", seq_along(pred_vars), ".png"),
+					paste0("Complexity_CompTimeTotal1", seq_along(pred_vars), ".png"))
+	
+	for (iv in 1:ncol(resp)) for (ipred in seq_along(pred_vars))
+		plot_complexity(preds = pred_vars[ipred], y = complexity[, iv], ylab = ylabs[iv], fname = fnames[[iv]][ipred])
 
 	print(paste(Sys.time(), ": Model complexity done"))
 }
@@ -881,7 +897,7 @@ for(re in which(runEvals[,'types'] == plot.type & runEvals[,'errors'] == plot.er
     ids <- cbind(ids,runRequests[ids,])
     for(ir in seq_along(regions)){
 
-      Ftmp <- Otmp <- matrix(NA, nrow=length(bres[[ids[1,1]]]$Proj[[ir]]$Proj$pred), ncol=nrow(ids))
+      Ftmp <- Otmp <- matrix(NA, nrow=length(bres[[ids[1,1]]]$Proj[[ir]]), ncol=nrow(ids))
       
       Rtmp <- list()
       
@@ -889,7 +905,7 @@ for(re in which(runEvals[,'types'] == plot.type & runEvals[,'errors'] == plot.er
         coordsXY <- climData[(climData[, "region"] == regions[ir]), c("x", "y")]
   
         for(rr in 1:nrow(ids)){
-          Ftmp[,rr] <- bres[[ids[rr,1]]]$Proj[[ir]]$Proj$pred
+          Ftmp[,rr] <- bres[[ids[rr,1]]]$Proj[[ir]]
           Otmp[,rr] <- obsData[[paste(ids[rr,'types'],ids[rr,'errors'],sep="_")]][(climData[, "region"] == regions[ir]), ids[rr, 'realizations']]
           Rtmp[[rr]] <- bres[[ids[rr,1]]]$ResponseCurvePreds[[ir]]
           
@@ -904,7 +920,7 @@ for(re in which(runEvals[,'types'] == plot.type & runEvals[,'errors'] == plot.er
                             climData[(climData[, "region"] == regions[ir]), c("x", "y")])
           
           for(rr in 1:nrow(ids)){
-            Ftmp[, rr] <- bres[[ids[rr,1]]]$Proj[[ir]]$Proj$pred
+            Ftmp[, rr] <- bres[[ids[rr,1]]]$Proj[[ir]]
             Otmp[, rr] <- obsData[[paste(ids[rr,'types'],ids[rr,'errors'],sep="_")]][(climData[, "region"] == regions[ir]), ids[rr, 'realizations']]
             Rtmp[[rr]] <- bres[[ids[rr,1]]]$ResponseCurvePreds[[ir]]
           }
@@ -979,7 +995,7 @@ for(re in runmods){
   ids <- cbind(ids,runRequests[ids,])
   for(ir in seq_along(regions)){
     
-    Ftmp <- Otmp <- matrix(NA, nrow=length(bres[[ids[1,1]]]$Proj[[ir]]$Proj$pred), ncol=nrow(ids))
+    Ftmp <- Otmp <- matrix(NA, nrow=length(bres[[ids[1,1]]]$Proj[[ir]]), ncol=nrow(ids))
     
     Rtmp <- list()
     
@@ -987,7 +1003,7 @@ for(re in runmods){
       coordsXY <- climData[(climData[, "region"] == regions[ir]), c("x", "y")]
       
       for(rr in 1:nrow(ids)){
-        Ftmp[,rr] <- bres[[ids[rr,1]]]$Proj[[ir]]$Proj$pred
+        Ftmp[,rr] <- bres[[ids[rr,1]]]$Proj[[ir]]
         Otmp[,rr] <- obsData[[paste(ids[rr,'types'],id[rr,"errors"],sep="_")]][(climData[, "region"] == regions[ir]), ids[rr, 'realizations']]
         Rtmp[[rr]] <- bres[[ids[rr,1]]]$ResponseCurvePreds[[ir]]
         
@@ -1002,7 +1018,7 @@ for(re in runmods){
                         climData[(climData[, "region"] == regions[ir]), c("x", "y")])
       
       for(rr in 1:nrow(ids)){
-        Ftmp[, rr] <- bres[[ids[rr,1]]]$Proj[[ir]]$Proj$pred
+        Ftmp[, rr] <- bres[[ids[rr,1]]]$Proj[[ir]]
         Otmp[, rr] <- obsData[[paste(ids[rr,'types'],id[rr,"errors"],sep="_")]][(climData[, "region"] == regions[ir]), ids[rr, 'realizations']]
         Rtmp[[rr]] <- bres[[ids[rr,1]]]$ResponseCurvePreds[[ir]]
       }
