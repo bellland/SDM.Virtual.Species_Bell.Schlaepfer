@@ -27,7 +27,7 @@ do.Figures <- FALSE
 libraries <- c("parallel")
 temp <- lapply(libraries, FUN=require, character.only=TRUE)
 
-date.run <- "20160223" #label for output folders (20140228; 20140304; 20140314; 20140320; 20140321; 20140627; 20150130)
+date.run <- "20160304" #label for output folders (20140228; 20140304; 20140314; 20140320; 20140321; 20140627; 20150130)
 if (do.ExampleForDropbox) date.run <- paste0(date.run, "_Example")
 
 ## Directories
@@ -89,7 +89,8 @@ evaluationRepeatsN <- switch(EXPR=paste0("v_", date.run),
                             v_20140627=25,
                             v_20150130=25,
                             v_20160209=4,
-                            v_20160223=50)
+                            v_20160223=50,
+                            v_20160304=50)
 presenceRealizationsN <- switch(EXPR=paste0("v_", date.run),
                                 v_20140228=40,
                                 v_20140304=5,
@@ -99,7 +100,8 @@ presenceRealizationsN <- switch(EXPR=paste0("v_", date.run),
                                 v_20140627=25,
                                 v_20150130=25,
                                 v_20160209=4,
-                            	v_20160223=40)
+                            	v_20160223=40,
+                            	v_20160304=40)
 repeatsN_partition_subsample <- 10
 predictorsN <- 10
 equalSamples <- FALSE #if TRUE, ensures that subsamples have the same number of presences as absences
@@ -288,8 +290,18 @@ if (do.SDMs) {
 		cond2 <- any(grepl("java", temp)) && any(grepl("Runtime Environment", temp))
 		
 		if (!cond1 || !cond2) {
-			message("Phillip's MaxEnt java program cannot be found; MaxEntP request will not be run")
+			message("Phillip's MaxEnt java program cannot be found; MaxEntP requests will not be run")
 			xt <- xt[!(runRequests[xt, "models"] == "MaxEntP")]
+		}
+	}
+	
+	if ("BRT" %in% sdm.models) {
+		cond1 <- !is.null(gbm::gbmCluster(1))
+		cond2 <- packageVersion("gbm") < '2.1.1'
+
+		if (cond1 || cond2) {
+			message("This version of the package 'gbm' creates additional clusters during cross-validation which will likely fail with our implementation of the parallelization. Under a good version of 'gbm', the following is true: is.null(gbm::gbmCluster(1)); BRT requests will not be run")
+			xt <- xt[!(runRequests[xt, "models"] == "BRT")]
 		}
 	}
 
@@ -306,21 +318,27 @@ if (do.SDMs) {
 	  }
 	  if (identical(parallel_backend, "parallel")) {
 		  clusterExport(cl, list.export)
-		  clusterEvalQ(cl, lapply(libraries, FUN=require, character.only=TRUE))
+		  clusterEvalQ(cl, lapply(libraries, require, character.only = TRUE))
 
-		  idones <- parLapplyLB(cl, xt, function(i) try(make.SDM(i), silent=TRUE)) # we need load-balancing because MaxEntP is much slower than the other models
-warnings()
+		  idones <- parLapplyLB(cl, xt, function(i) make.SDM(i)) # we need load-balancing because MaxEntP is much slower than the other models
+print(warnings())
 		  clusterEvalQ(cl, rm(list=ls()))
 		  clusterEvalQ(cl, gc())
 	  }
 
 	  badRuns <- sapply(idones, function(x) inherits(x, "try-error"))
-	  if (sum(badRuns) > 0) warning("There were ", sum(badRuns), " SDM runs that threw an error")
+	  if (sum(badRuns) > 0) {
+	  	warning("There were ", sum(badRuns), " SDM runs that threw an error")
+	  	idones_bad <- idones[badRuns]
+	  	runRequests_bad <- runRequests[xt[badRuns], ]
+	  	save(idones_bad, runRequests_bad, file = file.path(dir.prj, paste0(format(Sys.time(), "%Y%m%d_%H%M"), "_badRuns_", fflag, ".RData")))
+	  }
   }
   
 
-  # Get data from disk
+  # Identify runs
   if (FALSE) {
+  	  # Get data from disk
 	  bres <- list()
 	  for (i in seq_len(nrow(runRequests))) {
 		bres[[i]] <- try(readRDS(file = get_temp_fname(runRequests[i, ], runRequestIDs[i])), silent = TRUE)
@@ -337,14 +355,13 @@ warnings()
       } else {
         rm(bres)
       }
+  } else {
+		goodRuns <- !sapply(seq_len(nrow(runRequests)), function(i) inherits(try(readRDS(file = get_temp_fname(runRequests[i, ], runRequestIDs[i])), silent = TRUE), "try-error"))
+		if(all(!goodRuns)) stop(paste(Sys.time(), ": No SDM successful"))
+		print(paste(Sys.time(), ":", sum(goodRuns), "out of", length(goodRuns), "SDMs successful"))
+		#runIDs = index for which row of runRequests corresponds to elements of bres
+		runIDs <- which(goodRuns)
   }
-  
-  #Identify runs
-  goodRuns <- !sapply(seq_len(nrow(runRequests)), function(i) inherits(try(readRDS(file = get_temp_fname(runRequests[i, ], runRequestIDs[i])), silent = TRUE), "try-error"))
-  if(all(!goodRuns)) stop(paste(Sys.time(), ": No SDM successful"))
-  print(paste(Sys.time(), ":", sum(goodRuns), "out of", length(goodRuns), "SDMs successful"))
-  #runIDs = index for which row of runRequests corresponds to elements of bres
-  runIDs <- na.exclude(match(apply(temp, 1, paste, collapse="_"), table=apply(runRequests, MARGIN=1, FUN=function(x) paste(trimws(x), collapse="_"))))
   saveRDS(runIDs, file = file.path(dir.sdm, filename.saveRunIDs))
 
 

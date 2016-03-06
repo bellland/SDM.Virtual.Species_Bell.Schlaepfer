@@ -585,6 +585,18 @@ calc_sdms_and_predict <- compiler::cmpfun(function(runID, bdat, bopt, new_region
 #											strata = factor(c(0, 1)), # NOTE: biomod2 sets this, but it has no influence on result
 											nodesize = bopt$nodesize,
 											maxnodes = bopt$maxnodes))["elapsed"]
+
+# balancing classes seems to worsen evaluation performance
+#temp2 <- rfUtilities::rf.classBalance(xdata = data.tmp[, c("LnP", "MinT")], ydata = as.factor(data.tmp[, 1]), #classification random.forest: y must be a factor
+##	 										formula = bopt$myFormula, #For large data sets, especially those with large number of variables, calling randomForest via the formula interface is not advised: There may be too much overhead in handling the formula.
+##	  										data = data.tmp,
+#											ntree = bopt$ntree,
+#											mtry = bopt$mtry,
+#											importance = FALSE,
+#											norm.votes = TRUE,
+##											strata = factor(c(0, 1)), # NOTE: biomod2 sets this, but it has no influence on result
+#											nodesize = bopt$nodesize,
+#											maxnodes = bopt$maxnodes)
 	
 		temp[["OOB"]] <- temp$err.rate[temp$ntree, "OOB"] #OOB estimate of error rate
 	
@@ -592,13 +604,14 @@ calc_sdms_and_predict <- compiler::cmpfun(function(runID, bdat, bopt, new_region
 	} else 
 
 	if (runID["models"] == "BRT") {
-		its <- 0
+		its <- comp_time2 <- comp_time1 <- n.trees.opt <- 0
+		temp <- list()
 	
 		# gbm vignette: "I usually aim for 3,000 to 10,000 iterations with shrinkage rates between 0.01 and 0.001"
-		comp_time2 <- system.time(
-			while (	bopt$shrinkage <= 0.1 && bopt$shrinkage >= 0.0001 && its < 10) {
+		comp_time2 <- try(system.time(
+			while (bopt$shrinkage <= 0.1 && bopt$shrinkage >= 0.0001 && its < 10) {
 				its <- its + 1
-				comp_time1 <- system.time(
+				comp_time1 <- try(system.time(
 					temp <- gbm::gbm(formula = bopt$myFormula,
 									distribution = "bernoulli",
 									data = data.tmp,
@@ -609,10 +622,13 @@ calc_sdms_and_predict <- compiler::cmpfun(function(runID, bdat, bopt, new_region
 									shrinkage = bopt$shrinkage, 
 									bag.fraction = bopt$bag.fraction,
 									train.fraction = bopt$train.fraction, 
-									verbose = FALSE)
-				)["elapsed"]
-				n.trees.opt <- gbm::gbm.perf(temp, method = bopt$perf.method)
-		
+									verbose = FALSE,
+									n.cores = 0) # we don't want this to run parallel; the calls to make.SDMs() are parallelized
+				)["elapsed"], silent = TRUE)
+				if (inherits(comp_time1, "try-error")) stop(comp_time1)
+				
+				n.trees.opt <- gbm::gbm.perf(temp, method = bopt$perf.method, plot.it = FALSE)
+
 				if (n.trees.opt <= 3000) {
 					bopt$shrinkage <- bopt$shrinkage / 5
 				} else if (n.trees.opt >= 10000) {
@@ -620,16 +636,24 @@ calc_sdms_and_predict <- compiler::cmpfun(function(runID, bdat, bopt, new_region
 				} else {
 					if (n.trees.opt >= bopt$n.trees) {
 						bopt$n.trees <- 2 * bopt$n.trees
-					} else break
+					} else {
+						break # success!
+					}
 				}
 			}
-		)["elapsed"]
-		bsdms$comp_time <- comp_time1
-		bsdms$comp_time_total <- comp_time2
-	
+		)["elapsed"], silent = TRUE)
+		
+		if (inherits(comp_time2, "try-error")) stop(runID, " failed during call to 'gbm': ", comp_time2)
 		if (its >= 10) stop(runID, " did not reach convergence")
 
+		bsdms$comp_time <- comp_time1
+		bsdms$comp_time_total <- comp_time2
+		
+		bsdms$shrinkage <- bopt$shrinkage
+		bsdms$n.trees <- bopt$n.trees
+
 		temp[["n.trees.opt"]] <- n.trees.opt
+		temp[["its"]] <- its
 		bsdms$m <- temp
 	}
 
@@ -725,9 +749,8 @@ make.SDM <- compiler::cmpfun(function(i){
 		N <- sum(i_regions[[baseRegion]])
 		samp <- sample(x=1:N, size=trunc(N*DSplit/100), replace=FALSE)
 
-		if(equalSamples)
-			samp <- get.balanced.sample(obs[i_regions[[baseRegion]]],samp)
-
+		if (equalSamples) samp <- get.balanced.sample(obs[i_regions[[baseRegion]]],samp)
+		
 		bdat <- set_Data(type = type,
 					   error = error,
 					   obs = obs[i_regions[[baseRegion]]],
@@ -751,7 +774,9 @@ make.SDM <- compiler::cmpfun(function(i){
 					eval_disc.methods = eval_disc.methods,
 					dir_temp = dirname(ftemp)), silent = TRUE)
 
-		if (!inherits(temp, "try-error")) {
+		if (inherits(temp, "try-error")) {
+			res <- temp
+		} else {
 			bresM <- modifyList(bresM, temp)
 
 			#clean fitted model objects, i.e., it will NOT work with predict.glm etc.
@@ -769,16 +794,18 @@ make.SDM <- compiler::cmpfun(function(i){
 								bresM[["m"]]$class <- "randomForest"
 								bresM[["m"]][c("type", "importance", "ntree", "mtry", "confusion", "OOB")]
 							} else if (identical(model, "BRT")) {
-								bresM[["m"]][c("initF", "n.trees.opt", "distribution", "interaction.depth")]
+								bresM[["m"]][c("initF", "n.trees.opt", "distribution", "interaction.depth", "its")]
 							}
 			bresM[["class"]] <- switch(EXPR = model, GLM = "glm", GAM = "gam", MaxEnt = "maxent", MaxEntP = "MaxEntP", RF = "randomForest", BRT = "gbm")
-		}
 				
-		# Memoize the results
-		saveRDS(bresM, ftemp)
+			# Memoize the results
+			saveRDS(bresM, ftemp)
+			
+			res <- i
+		}
 	}  
   
-	i
+	res
 })
 
 
