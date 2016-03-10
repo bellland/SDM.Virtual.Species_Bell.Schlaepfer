@@ -9,6 +9,24 @@
 ###############################################################################
 
 
+
+# '20160304' with 320,000 runs, 23 cores, and c("GLM", "GAM", "MaxEntP", "RF", "BRT")
+#	do.SDMs			2016/03/07 completed in 1262 core-hours
+#	do.RegionEvals	2016/03/07 completed in 483 core-hours
+#	do.Partition	2016/03/XX completed in 144 core-hours
+#	do.Complexity	2016/02/25 completed in 1.5 core-hours
+#	do.Evaluation	2016/02/26 completed in 2.2 core-hours
+
+
+# '20160223' with 320,000 runs, 22 cores, and c("GLM", "GAM", "MaxEnt", "RF", "BRT")
+#	do.SDMs			2016/02/24 completed in 237 core-hours
+#	do.RegionEvals	2016/02/26 completed in 482 core-hours
+#	do.Partition
+#	do.Complexity	2016/02/25 completed in 1.5 core-hours
+#	do.Evaluation	2016/02/26 completed in 2.2 core-hours
+
+
+
 ###################################################
 #TODOs
 #  - (Dave) Check GAMs convergence information to check that poor GAM with interaction performance is not caused by misspecified convergence parameters etc.

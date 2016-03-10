@@ -676,6 +676,9 @@ calc_sdms_and_predict <- compiler::cmpfun(function(runID, bdat, bopt, new_region
 								 pred.eval = pred.eval, obs.eval = eval.tmp[,1],
 								 method = eval_disc.methods)	
 		
+		# Re-scale to save disk space
+		preds <- make_integer(preds)
+		
 		# Predict across regions
 		bsdms$Proj <- lapply(names(new_regions), function(ir) preds[id_pred == ir])
 		names(bsdms$Proj) <- names(new_regions)
@@ -1085,32 +1088,33 @@ get_complexity <- compiler::cmpfun(function(i) {
 	res
 })
 
-plot_complexity <- function(preds = NULL, y, ylab, fname) {
+plot_complexity <- function(preds = NULL, y, ylab, ylog, fname) {
 	dir.create(dir_temp <- file.path(dir.figs, "Complexity"), showWarnings = FALSE)
 	ftemp <- file.path(dir_temp, fname)
 	
 	if (is.null(preds)) preds <- colnames(runEvals)
-	ylim <- c(0, max(y, na.rm = TRUE))
-	cats <- unique(runRequests[, preds])
-	ncats <- nrow(cats)
+	ylim <- c(if (ylog) 0.01 else 0, max(y, na.rm = TRUE))
+	x_complex <- apply(runRequests[, preds], 1, paste, collapse = "_")
+	cats <- unique(x_complex)
+	ncats <- length(cats)
 	
 	# determine figure and axis label size
+	xcex <- 0.85
 	pwidth <- max(5, 10 / 40 * ncats)
 	pheight_target <- 7
-	png(file = ftemp, width = pwidth, height = pheight_target, units="in", res=600)
-	xcex <- 0.85
-	nchar_xlab <- max(strwidth(apply(cats, 1, paste, collapse = "_"), units = "inches", cex = xcex))
+	png(filename = ftemp, width = pwidth, height = pheight_target, units="in", res=600)
+	nchar_xlab <- max(strwidth(cats, units = "inches", cex = xcex))
 	pheight_ratio <- min(6, max(3, pheight_target / nchar_xlab))
 	pheight <- round(nchar_xlab * pheight_ratio * 2) / 2
 	dev.off()
 	
 	# plot
-	png(file = ftemp, width = pwidth, height = pheight, units="in", res=600)
-	op <- par(mar = c(0.5 + ceiling(nchar_xlab / par("cin")[2]), 4, 1, 1))
-	tmp <- boxplot(y ~ apply(runRequests[, preds],1,paste,collapse="_"), ylim = ylim, axes=FALSE,frame.plot=TRUE)
+	png(filename = ftemp, width = pwidth, height = pheight, units="in", res=600)
+	op <- par(mar = c(0.75 + ceiling(nchar_xlab / par("cin")[2]), 4, 1, 1))
+	tmp <- boxplot(y ~ x_complex, log = if (ylog) "y" else "", ylim = ylim, axes=FALSE, frame.plot=TRUE)
 	axis(2)
-	axis(1,at = 1:length(tmp$names), labels = tmp$names,las=3, cex.axis = xcex)
-	mtext(ylab,side=2,line=2.5)
+	axis(1,at = 1:length(tmp$names), labels = tmp$names, las = 3, cex.axis = xcex)
+	mtext(ylab, side = 2,line = 2.5)
 	par(op)
 	dev.off()
 }

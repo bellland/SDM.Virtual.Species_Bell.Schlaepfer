@@ -13,13 +13,13 @@
 action <- "continue" # "new", restart all computations; "continue", attempts account for already completed simulations
 do.ExampleForDropbox <- FALSE #set this to TRUE to access/write to 'Example' subset on dropbox
 
-do.SDMs <- FALSE					# '20160223' with 320,000 runs: 2016/02/24 completed in 237 core-hours
-do.RegionEvals <- FALSE				# '20160226' with 320,000 runs: 2016/02/26 completed in 482 core-hours
-do.Partition <- TRUE				
-do.Complexity <- FALSE				# '20160223' with 320,000 runs: 2016/02/25 completed in 1.5 core-hours
-do.Evaluation <- FALSE				# '20160226' with 320,000 runs: 2016/02/26 completed in 2.2 core-hours
-do.EvaluationSummary <- FALSE
-do.Extrapolation <- FALSE
+do.SDMs <- FALSE
+do.RegionEvals <- FALSE
+do.Partition <- FALSE
+do.Complexity <- FALSE
+do.Evaluation <- TRUE
+do.EvaluationSummary <- TRUE
+do.Extrapolation <- TRUE
 do.Figures <- FALSE
 
 ##
@@ -70,9 +70,9 @@ filename.saveParts <- paste0("SDMs_VarPartition_", fflag, ".rds")
 filename.saveComplexity <- paste0("SDMs_ModelComplexity_", fflag, ".rds")
 filename.saveTypeData <- paste0("TypeData_", fflag, ".RData")
 
-baseRegion <- 2 #NorthWest
-regions <- 1:4
-types <- c("AIF", "SCT", "SIF", "SIT")
+baseRegion <- 2
+regions <- 1:4 	#	1, Southern Rocky Mountains (SR); 2, Northern Rocky Mountains (NR); 3, Southwest (SW); 4, Great Plains (GP)
+types <- c("AIF", "SCT", "SIF", "SIT") # A, asymmetric; S, symmetric; I, independent; C, co-dependent; F, full; T, truncated
 mlevels <- list(woInt=c("linear", "squared"), wInt=c("linear", "squared", "interaction"))
 sdm.models <- c("GLM", "GAM", "MaxEntP", "RF", "BRT")
 eval_disc.methods <- c('TSS','ROC','KAPPA')
@@ -321,7 +321,8 @@ if (do.SDMs) {
 		  clusterEvalQ(cl, lapply(libraries, require, character.only = TRUE))
 
 		  idones <- parLapplyLB(cl, xt, function(i) make.SDM(i)) # we need load-balancing because MaxEntP is much slower than the other models
-print(warnings())
+		  print(warnings())
+		  
 		  clusterEvalQ(cl, rm(list=ls()))
 		  clusterEvalQ(cl, gc())
 	  }
@@ -356,7 +357,7 @@ print(warnings())
         rm(bres)
       }
   } else {
-		goodRuns <- !sapply(seq_len(nrow(runRequests)), function(i) inherits(try(readRDS(file = get_temp_fname(runRequests[i, ], runRequestIDs[i])), silent = TRUE), "try-error"))
+		goodRuns <- sapply(seq_len(nrow(runRequests)), function(i) file.exists(get_temp_fname(runRequests[i, ], runRequestIDs[i])))
 		if(all(!goodRuns)) stop(paste(Sys.time(), ": No SDM successful"))
 		print(paste(Sys.time(), ":", sum(goodRuns), "out of", length(goodRuns), "SDMs successful"))
 		#runIDs = index for which row of runRequests corresponds to elements of bres
@@ -410,7 +411,8 @@ if (do.RegionEvals) {
 		# one call to calc_eval_regions() if the evaluation has to be freshly calculated takes about 3.7 core-seconds
 		# expected time for 320,000 calls is 15 wall-time hours
 		idones <- parLapply(cl, runIDs, function(i) calc_eval_regions(i))
-
+		print(warnings())
+		
 		clusterEvalQ(cl, rm(list=ls()))
 		clusterEvalQ(cl, gc())
 	} else stop("this is not implemented 3")
@@ -430,7 +432,9 @@ if (do.Partition) {
 		part.region <- readRDS(file = pfile)
 	} else {
 		if (!exists("runIDs")) runIDs <- readRDS(file = file.path(dir.sdm, filename.saveRunIDs))
-  
+  		
+  		dir.create(dir.partits <- file.path(dir.tables, "Partition"), showWarnings = FALSE)
+  		
 		list.export <- c("climData", "obsData", "probData", "centerMeansData", "action",
 					   "runRequests", "runRequestIDs", "baseRegion", "regions", "factors", "variables", "eval_disc.methods", "eval_cont.methods",
 					   "calc_region_partition2", "get_region_eval", "calc_eval_regions", "get.cutoff", "rmse", "mae",
@@ -445,9 +449,7 @@ if (do.Partition) {
 			print(paste(Sys.time(), ": Evaluation of region:", ir))
 
 			#get evaluation statistics
-			#	- this takes about 1.24 s per call to get_region_eval()
-			#	- 320,000 runs of region 1 took 250 core-hours
-			ftemp1 <- file.path(dir.tables, "Partition", paste0("Partition_Evals_region", ir, "_temp1.rds"))
+			ftemp1 <- file.path(dir.partits, paste0("Partition_Evals_region", ir, "_temp1.rds"))
 			if (action == "continue" && file.exists(ftemp1)) {
 				part.mat[[ir]] <- readRDS(file = ftemp1)
 			} else {
@@ -460,12 +462,12 @@ if (do.Partition) {
 					clusterExport(cl, "ir")
 
 					idones <- parSapply(cl, runIDs, function(i) get_region_eval(i, ir = ir, stat.methods = 'Testing.data'), USE.NAMES = FALSE)
-warnings()
+					print(warnings())
+					
 					clusterEvalQ(cl, gc())
 				} else stop("this is not implemented 1")
 		
-				temp <- t(idones)
-				part.mat[[ir]][runIDs, variables] <- temp
+				part.mat[[ir]][runIDs, variables] <- t(idones)
 
 				saveRDS(part.mat[[ir]], file = ftemp1)
 			}
@@ -497,16 +499,14 @@ warnings()
 				clusterExport(cl2, c("mdata", "ir"))
 
 				part.out <- parLapply(cl2, seq_along(variables), function(j) calc_region_partition2(j, ir))
-warnings()
+				print(warnings())
+				
 				clusterEvalQ(cl2, gc())
 			} else stop("this is not implemented 1")
 		
-save(part.out, ir, file = file.path(dir.prj, paste0("part_region", ir, ".RData")))
 			names(part.out) <- variables
 			part.region[[ir]] <- part.out
 
-save(part.region, ir, file = file.path(dir.prj, "part_region.RData"))
-print(paste(Sys.time(), "loop2 region", ir))
 		}
   
 		saveRDS(part.region, file = pfile)
@@ -518,23 +518,30 @@ print(paste(Sys.time(), "loop2 region", ir))
 			clusterEvalQ(cl2, gc())
 		}
 	}
-print(paste(Sys.time(), "here done"))
-stop()
+	
+	# Table 2
+	var.sort <- c(eval_disc.methods[c(1, 3, 2)], eval_cont.methods)
+	reg.sort <- c(2, 1, 2, 4)
+	part.sort <- c(temp1 <- c("types", "models", "mlevels", "errors", "realizations", "Residuals"),
+					(temp2 <- dimnames(part.region[[1]][[1]])[[2]])[!(temp2 %in% temp1)])
+	f_agg <- function(f) lapply(part.region[reg.sort], function(pr) t(sapply(pr[var.sort], function(prvar) apply(prvar[, part.sort, "prop"], 2, f))))
+	
+	funs <- c("mean", "sd")
+	for (f in seq_along(funs)) {
+	
+		parted <- f_agg(get(funs[f]))
 
-  	fnames <- dimnames(part.region[[1]])[2]
-	var.sort <- c(2:(length(fnames)-1),1,length(fnames))
-	reg.sort <- c(2,1,3,4)
-  
-	part.mat <- matrix(NA,nrow=length(reg.sort)*length(variables),ncol=length(var.sort)+2)
-    colnames(part.mat) <- c('region','metric',(part.region[[1]][[2]]$prop[var.sort,1]))
-    part.mat[,'region'] <- rep(c('NR','SR','SW','GP'),each=length(variables))
-    part.mat[,'metric'] <- rep(variables,times=length(regions))
-  
-	for(j in 1:length(reg.sort))
-		for(i in 1:length(variables))
-			part.mat[which(part.mat[,'metric'] == variables[i])[j],2+1:length(var.sort)] <- (part.region[[reg.sort[j]]][[i]]$prop[var.sort,3])
-  
-	write.csv(part.mat,file.path(dir.tables,"var.part.csv"),quote=FALSE)
+		part.mat <- matrix(NA, nrow = length(reg.sort) * length(var.sort), ncol = 2 + length(part.sort),
+							dimnames = list(NULL, c("region", "metric", part.sort)))
+		part.mat[, 'region'] <- rep(c('NR','SR','SW','GP'), each = length(var.sort))
+		part.mat[, 'metric'] <- rep(var.sort, times = length(reg.sort))
+
+		for(j in seq_along(reg.sort)) {
+			part.mat[seq_along(var.sort) + (j - 1) * length(var.sort), -(1:2)] <- parted[[j]]
+		}
+		
+		write.csv(part.mat, file.path(dir.tables, paste0("var.part_", funs[f], ".csv")), quote = FALSE)
+	}
   
 	print(paste(Sys.time(), ": Partition done"))
 }
@@ -556,7 +563,8 @@ if (do.Complexity) {
 			clusterExport(cl, list.export)
 
 			idones <- parSapply(cl, runIDs, function(i) get_complexity(i), USE.NAMES = FALSE)
-
+			print(warnings())
+			
 			clusterEvalQ(cl, rm(list=ls()))
 			clusterEvalQ(cl, gc())
 		} else stop("this is not implemented 2")
@@ -568,15 +576,16 @@ if (do.Complexity) {
 		saveRDS(complexity, file = cfile)
 	}
 	
-	resp <- colnames(complexity) 
+	resp <- c("edf", "comp_time_s", "comp_time_total_s")
 	pred_vars <- list(c("models", "mlevels", "types", "errors"), c("models", "mlevels", "types"), c("models", "mlevels"))
 	ylabs <- list("Degrees of Freedom", "Computation time (s)", "Computation time (s)")
+	ylogs <- list(FALSE, TRUE, TRUE)
 	fnames <- list(paste0("Complexity_DF", seq_along(pred_vars), ".png"),
 					paste0("Complexity_CompTime", seq_along(pred_vars), ".png"),
-					paste0("Complexity_CompTimeTotal1", seq_along(pred_vars), ".png"))
+					paste0("Complexity_CompTimeTotal", seq_along(pred_vars), ".png"))
 	
-	for (iv in 1:ncol(resp)) for (ipred in seq_along(pred_vars))
-		plot_complexity(preds = pred_vars[ipred], y = complexity[, iv], ylab = ylabs[iv], fname = fnames[[iv]][ipred])
+	for (iv in seq_along(resp)) for (ipred in seq_along(pred_vars))
+		plot_complexity(preds = pred_vars[[ipred]], y = complexity[, resp[iv]], ylab = ylabs[[iv]], ylog = ylogs[[iv]], fname = fnames[[iv]][ipred])
 
 	print(paste(Sys.time(), ": Model complexity done"))
 }
@@ -695,7 +704,7 @@ if (do.Evaluation) {
 		clusterExport(cl2, list.export)
 
 		idones <- parLapply(cl2, 1:nrow(runEvals), function(i) try(eval3.SDMs(i), silent=TRUE))
-warnings()
+		print(warnings())
 		
 		if (num_cores > 8) {
 			stopCluster(cl2)
