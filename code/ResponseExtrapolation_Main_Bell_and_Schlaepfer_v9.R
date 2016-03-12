@@ -17,9 +17,9 @@ do.SDMs <- FALSE
 do.RegionEvals <- FALSE
 do.Partition <- FALSE
 do.Complexity <- FALSE
-do.Evaluation <- TRUE
-do.EvaluationSummary <- TRUE
-do.Extrapolation <- TRUE
+do.Evaluation <- FALSE
+do.EvaluationSummary <- FALSE
+do.Extrapolation <- FALSE
 do.Figures <- FALSE
 
 ##
@@ -69,9 +69,11 @@ filename.saveEvalIDs <- paste0("evalIDs_", fflag, ".rds")
 filename.saveParts <- paste0("SDMs_VarPartition_", fflag, ".rds")
 filename.saveComplexity <- paste0("SDMs_ModelComplexity_", fflag, ".rds")
 filename.saveTypeData <- paste0("TypeData_", fflag, ".RData")
+filename.saveEvalSummaries <- paste0("EvalSummaries_", fflag, ".RData")
 
 baseRegion <- 2
 regions <- 1:4 	#	1, Southern Rocky Mountains (SR); 2, Northern Rocky Mountains (NR); 3, Southwest (SW); 4, Great Plains (GP)
+reg.sort <- c(NR = 2, SR = 1, SW = 3, GP = 4)
 types <- c("AIF", "SCT", "SIF", "SIT") # A, asymmetric; S, symmetric; I, independent; C, co-dependent; F, full; T, truncated
 mlevels <- list(woInt=c("linear", "squared"), wInt=c("linear", "squared", "interaction"))
 sdm.models <- c("GLM", "GAM", "MaxEntP", "RF", "BRT")
@@ -521,7 +523,6 @@ if (do.Partition) {
 	
 	# Table 2
 	var.sort <- c(eval_disc.methods[c(1, 3, 2)], eval_cont.methods)
-	reg.sort <- c(2, 1, 2, 4)
 	part.sort <- c(temp1 <- c("types", "models", "mlevels", "errors", "realizations", "Residuals"),
 					(temp2 <- dimnames(part.region[[1]][[1]])[[2]])[!(temp2 %in% temp1)])
 	f_agg <- function(f) lapply(part.region[reg.sort], function(pr) t(sapply(pr[var.sort], function(prvar) apply(prvar[, part.sort, "prop"], 2, f))))
@@ -533,7 +534,7 @@ if (do.Partition) {
 
 		part.mat <- matrix(NA, nrow = length(reg.sort) * length(var.sort), ncol = 2 + length(part.sort),
 							dimnames = list(NULL, c("region", "metric", part.sort)))
-		part.mat[, 'region'] <- rep(c('NR','SR','SW','GP'), each = length(var.sort))
+		part.mat[, 'region'] <- rep(names(reg.sort), each = length(var.sort))
 		part.mat[, 'metric'] <- rep(var.sort, times = length(reg.sort))
 
 		for(j in seq_along(reg.sort)) {
@@ -623,7 +624,7 @@ if (do.Extrapolation) {
 	NT2rast <- rasterize(x = proxy, y = rall, field = NT2)
 
 	# Plot the raster layers
-	plot_extrapolation(NT1rast, NT2rast, file = file.path(dir.figs, "Extrapolation.png"))
+	plot_extrapolation(NT1rast, NT2rast, file = file.path(dir.maps, "Extrapolation.png"))
 	
 }
 
@@ -745,47 +746,65 @@ if (do.Evaluation) {
 
 ## Summarize model evaluations
 if (do.EvaluationSummary) {
-  print(paste(Sys.time(), ": Evaluation summary started"))
+	print(paste(Sys.time(), ": Evaluation summary started"))
 
 	libraries <- c("reshape2")
 	temp <- lapply(libraries, FUN=require, character.only=TRUE)
-
-	if (!exists("evalIDs")) evalIDs <- readRDS(file = file.path(dir.sdm, filename.saveEvalIDs))
+	
+	ftemp <- file.path(dir.tables, filename.saveEvalSummaries)
+	if (action == "continue" && file.exists(ftemp)) {
+		load(ftemp) #load: evalA_SDMs, evalA_Proj, evalA_ProjDiffs
+	} else {
+		if (!exists("evalIDs")) evalIDs <- readRDS(file = file.path(dir.sdm, filename.saveEvalIDs))
   
-	#Fill evaluation arrays with values from bres
-	eval.methods <- c(eval_disc.methods, eval_cont.methods)
-	evalA_SDMs <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(sdm.models), length(eval_disc.methods)+1, 2), dimnames=list(types,errors, names(mlevels), sdm.models, c(eval_disc.methods, "Deviance"), c("mean", "sd")))
-	evalA_Proj <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(regions), length(sdm.models), length(eval.methods), 2), dimnames=list(types,errors, names(mlevels), paste0("region", regions), sdm.models, eval.methods, c("mean", "sd")))
-	evalA_ProjDiffs <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(regions), length(sdm.models), length(eval.methods), 2), dimnames=list(types,errors, names(mlevels), paste0("region", regions), sdm.models, eval.methods, c("mean", "sd")))
+		#Fill evaluation arrays with values from bres
+		eval.methods <- c(eval_disc.methods, eval_cont.methods)
+		evalA_SDMs <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(sdm.models), length(eval_disc.methods)+1, 2), dimnames=list(types,errors, names(mlevels), sdm.models, c(eval_disc.methods, "Deviance"), c("mean", "sd")))
+		evalA_Proj <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(regions), length(sdm.models), length(eval.methods), 2), dimnames=list(types,errors, names(mlevels), paste0("region", regions), sdm.models, eval.methods, c("mean", "sd")))
+		evalA_ProjDiffs <- array(NA, dim=c(length(types), length(errors), length(mlevels), length(regions), length(sdm.models), length(eval.methods), 2), dimnames=list(types,errors, names(mlevels), paste0("region", regions), sdm.models, eval.methods, c("mean", "sd")))
   
-	for(i in evalIDs){
-		bevalM <- try(readRDS(file = get_temp_fname(runEvals[i, ], runEvalIDs[i])), silent = TRUE)
+		for(i in evalIDs){
+			bevalM <- try(readRDS(file = get_temp_fname(runEvals[i, ], runEvalIDs[i])), silent = TRUE)
 
-		evalID <- evalIDs[i]
-		it <- which(runEvals[i, "types"] == types)
-		ie <- which(runEvals[i, "errors"] == errors)
-		il <- which(runEvals[i, "mlevels"] == names(mlevels))
-		im <- which(runEvals[i, "models"] == sdm.models)
+			evalID <- evalIDs[i]
+			it <- which(runEvals[i, "types"] == types)
+			ie <- which(runEvals[i, "errors"] == errors)
+			il <- which(runEvals[i, "mlevels"] == names(mlevels))
+			im <- which(runEvals[i, "models"] == sdm.models)
 
-		evalA_SDMs[it, ie, il, im, , "mean"] <- as.numeric(c(t(bevalM$Eval$mean[, "Testing.data"]), bevalM$Deviance["mean"]))
-		evalA_SDMs[it, ie, il, im, , "sd"] <- as.numeric(c(t(bevalM$Eval$sd[, "Testing.data"]), bevalM$Deviance["sd"]))
-		for(ir in seq_along(regions)){
-			evalA_Proj[it, ie, il, ir, im, , "mean"] <- as.numeric(c(t(bevalM$Proj[[ir]]$Eval$mean[, "Testing.data"]), bevalM$Proj[[ir]]$EvalProb$mean))
-			evalA_Proj[it, ie, il, ir, im, , "sd"] <- as.numeric(c(t(bevalM$Proj[[ir]]$Eval$sd[, "Testing.data"]), bevalM$Proj[[ir]]$EvalProb$sd))
-			evalA_ProjDiffs[it, ie, il, ir, im, , "mean"] <- as.numeric(c(t(bevalM$Proj[[ir]]$EvalDiffToBase$mean[, "Testing.data"]), bevalM$Proj[[ir]]$EvalProbDiffToBase$mean))
-			evalA_ProjDiffs[it, ie, il, ir, im, , "sd"] <- as.numeric(c(t(bevalM$Proj[[ir]]$EvalDiffToBase$sd[, "Testing.data"]), bevalM$Proj[[ir]]$EvalProbDiffToBase$sd))
+			evalA_SDMs[it, ie, il, im, , "mean"] <- as.numeric(c(t(bevalM$Eval$mean[, "Testing.data"]), bevalM$Deviance["mean"]))
+			evalA_SDMs[it, ie, il, im, , "sd"] <- as.numeric(c(t(bevalM$Eval$sd[, "Testing.data"]), bevalM$Deviance["sd"]))
+			for(ir in seq_along(regions)){
+				evalA_Proj[it, ie, il, ir, im, , "mean"] <- as.numeric(c(t(bevalM$Proj[[ir]]$Eval$mean[, "Testing.data"]), bevalM$Proj[[ir]]$EvalProb$mean))
+				evalA_Proj[it, ie, il, ir, im, , "sd"] <- as.numeric(c(t(bevalM$Proj[[ir]]$Eval$sd[, "Testing.data"]), bevalM$Proj[[ir]]$EvalProb$sd))
+				evalA_ProjDiffs[it, ie, il, ir, im, , "mean"] <- as.numeric(c(t(bevalM$Proj[[ir]]$EvalDiffToBase$mean[, "Testing.data"]), bevalM$Proj[[ir]]$EvalProbDiffToBase$mean))
+				evalA_ProjDiffs[it, ie, il, ir, im, , "sd"] <- as.numeric(c(t(bevalM$Proj[[ir]]$EvalDiffToBase$sd[, "Testing.data"]), bevalM$Proj[[ir]]$EvalProbDiffToBase$sd))
+			}
 		}
+	
+		save(evalA_SDMs, evalA_Proj, evalA_ProjDiffs, file = ftemp)
 	}
   
 	#Reshape arrays into matrices
-	evalT_SDMs <- acast(melt(evalA_SDMs), formula=Var1+Var2+Var3+Var4~Var5+Var6)
-	evalT_Proj <- acast(melt(evalA_Proj), formula=Var1+Var2+Var3+Var4+Var5~Var6+Var7)
-	evalT_ProjDiffs <- acast(melt(evalA_ProjDiffs), formula=Var1+Var2+Var3+Var4+Var5~Var6+Var7)
+	evalT_SDMs_full <- acast(melt(evalA_SDMs), formula=Var1+Var2+Var3+Var4~Var5+Var6)
+	evalT_Proj_full <- acast(melt(evalA_Proj), formula=Var1+Var2+Var3+Var4+Var5~Var6+Var7)
+	evalT_ProjDiffs_full <- acast(melt(evalA_ProjDiffs), formula=Var1+Var2+Var3+Var4+Var5~Var6+Var7)
 
-	write.csv(evalT_SDMs, file=file.path(dir.tables, "Table_EvaluationModels.csv"))
-	write.csv(evalT_Proj, file=file.path(dir.tables, "Table_EvaluationProjections.csv"))
-	write.csv(evalT_ProjDiffs, file=file.path(dir.tables, "Table_EvaluationDifferencesProjections.csv"))
-  
+	write.csv(evalT_SDMs_full, file=file.path(dir.tables, "Table_EvaluationModels_full.csv"))
+	write.csv(evalT_Proj_full, file=file.path(dir.tables, "Table_EvaluationProjections_full.csv"))
+	write.csv(evalT_ProjDiffs_full, file=file.path(dir.tables, "Table_EvaluationDifferencesProjections_full.csv"))
+
+
+	#Reshape arrays into matrices and collapse across 'errors'
+	evalT_SDMs_collerr <- acast(melt(evalA_SDMs), formula=Var1+Var3+Var4~Var5+Var6, fun.aggregate = mean)
+	evalT_Proj_collerr <- acast(melt(evalA_Proj), formula=Var1+Var3+Var4+Var5~Var6+Var7, fun.aggregate = mean)
+	evalT_ProjDiffs_collerr <- acast(melt(evalA_ProjDiffs), formula=Var1+Var3+Var4+Var5~Var6+Var7, fun.aggregate = mean)
+
+	write.csv(evalT_SDMs_collerr, file=file.path(dir.tables, "Table_EvaluationModels_collerr.csv"))
+	write.csv(evalT_Proj_collerr, file=file.path(dir.tables, "Table_EvaluationProjections_collerr.csv"))
+	write.csv(evalT_ProjDiffs_collerr, file=file.path(dir.tables, "Table_EvaluationDifferencesProjections_collerr.csv"))
+
+
 	#Dave's figures
 	try(source(file.path(path.functions, "ResponseExtrapolation_PlotPerformance_Bell_and_Schlaepfer.R")))
  
