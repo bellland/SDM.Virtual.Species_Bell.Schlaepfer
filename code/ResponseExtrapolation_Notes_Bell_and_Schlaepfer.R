@@ -13,7 +13,7 @@
 # '20160304' with 320,000 runs, 23 cores, and c("GLM", "GAM", "MaxEntP", "RF", "BRT")
 #	do.SDMs			2016/03/07 completed in 1262 core-hours
 #	do.RegionEvals	2016/03/07 completed in 483 core-hours
-#	do.Partition	2016/03/XX completed in 144 core-hours
+#	do.Partition	2016/03/12 completed in 664 core-hours
 #	do.Complexity	2016/02/25 completed in 1.5 core-hours
 #	do.Evaluation	2016/02/26 completed in 2.2 core-hours
 
