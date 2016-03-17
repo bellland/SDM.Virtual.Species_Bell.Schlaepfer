@@ -1088,15 +1088,16 @@ get_complexity <- compiler::cmpfun(function(i) {
 	res
 })
 
-plot_complexity <- function(preds = NULL, y, ylab, ylog, fname) {
+plot_complexity <- function(data, preds, y_name, ylab, ylog, fname, outliers = TRUE, boxes = TRUE) {
 	dir.create(dir_temp <- file.path(dir.figs, "Complexity"), showWarnings = FALSE)
 	ftemp <- file.path(dir_temp, fname)
 	
-	if (is.null(preds)) preds <- colnames(runEvals)
-	ylim <- c(if (ylog) 0.01 else 0, max(y, na.rm = TRUE))
-	x_complex <- apply(runRequests[, preds], 1, paste, collapse = "_")
-	cats <- unique(x_complex)
+	ylim <- c(if (ylog) 0.01 else 0, max(data[, y_name], na.rm = TRUE))
+	xcats <- apply(data[, preds], 1, paste, collapse = " ")
+	for (i in seq_along(mlevels)) xcats <- gsub(names(mlevels)[i], mlevels_labels[i], xcats)
+	cats <- unique(xcats)
 	ncats <- length(cats)
+	xcats <- factor(xcats, levels = cats, ordered = TRUE, nmax = ncats)
 	
 	# determine figure and axis label size
 	xcex <- 0.85
@@ -1111,10 +1112,19 @@ plot_complexity <- function(preds = NULL, y, ylab, ylog, fname) {
 	# plot
 	png(filename = ftemp, width = pwidth, height = pheight, units="in", res=600)
 	op <- par(mar = c(0.75 + ceiling(nchar_xlab / par("cin")[2]), 4, 1, 1))
-	tmp <- boxplot(y ~ x_complex, log = if (ylog) "y" else "", ylim = ylim, axes=FALSE, frame.plot=TRUE)
-	axis(2)
-	axis(1,at = 1:length(tmp$names), labels = tmp$names, las = 3, cex.axis = xcex)
-	mtext(ylab, side = 2,line = 2.5)
+	tmp <- if (boxes) {
+				boxplot(data[, y_name] ~ xcats, outline = outliers,
+					log = if (ylog) "y" else "", ylim = ylim, axes=FALSE, frame.plot=TRUE)
+			} else {
+				try(beanplot::beanplot(data[, y_name] ~ xcats, what = c(0, 1, 0, 0),
+					log = if (ylog) "y" else "", ylim = ylim, axes = FALSE, frame.plot=TRUE),
+					silent = TRUE)
+			}
+	if (!inherits(tmp, "try-error")) {
+		axis(2)
+		axis(1, at = seq_len(ncats), labels = cats, las = 3, cex.axis = xcex)
+		mtext(ylab, side = 2, line = 2.5)
+	}
 	par(op)
 	dev.off()
 }

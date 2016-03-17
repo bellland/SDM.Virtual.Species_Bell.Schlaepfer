@@ -82,6 +82,9 @@ eval_cont.methods <- c('RMSE', 'MAE')
 errors <- c("binom","binom+res","spatial","spatial+res")
 quantile.probs <- c(0.025, 0.05, 0.25, 0.5, 0.75, 0.95, 0.975)
 
+models_sort_labels <- c("GLM", "GAM", "RF", "MaxEntP", "BRT")
+mlevels_labels <- c("w/o Inter.", "w Inter.")
+
 evaluationRepeatsN <- switch(EXPR=paste0("v_", date.run),
                             v_20140228=50,
                             v_20140304=10,
@@ -121,13 +124,22 @@ if (action == "continue" && file.exists(ftemp)) {
 	} else {
 		runRequests <- expand.grid(sdm.models, names(mlevels), types, errors, 1:presenceRealizationsN, 1:evaluationRepeatsN, stringsAsFactors=FALSE, KEEP.OUT.ATTRS=FALSE)
 		colnames(runRequests) <- c("models", "mlevels", "types", "errors", "realizations", "run")
+
+		runRequests2 <- expand.grid(errors, types, names(mlevels), models_sort_labels, 1:presenceRealizationsN, 1:evaluationRepeatsN, stringsAsFactors=FALSE, KEEP.OUT.ATTRS=FALSE)
+		colnames(runRequests2) <- c("errors", "types", "mlevels", "models", "realizations", "run")
+		runRequests2 <- runRequests2[, c(4:1, 5:6)]
 	}
 	runRequestIDs <- apply(runRequests, MARGIN = 1, function(x) paste0("SDM_", paste(trimws(x), collapse = "_")))
+	runRequestIDs2 <- apply(runRequests2, MARGIN = 1, function(x) paste0("SDM_", paste(trimws(x), collapse = "_")))
+	iorder_runRequests <- match(runRequestIDs2, table = runRequestIDs)
 	
 	runEvals <- unique(runRequests[, c("models", "mlevels", "types", "errors")]) #get the unique combinations of model, type, and mlevel
 	runEvalIDs <- apply(runEvals, MARGIN = 1, function(x) paste0("Eval_", paste(trimws(x), collapse = "_")))
-	
-	save(runRequests, runRequestIDs, runEvals, runEvalIDs, file = ftemp)
+	runEvals2 <- unique(runRequests2[, c("models", "mlevels", "types", "errors")]) #get the unique combinations of model, type, and mlevel
+	runEvalIDs2 <- apply(runEvals2, MARGIN = 1, function(x) paste0("Eval_", paste(trimws(x), collapse = "_")))
+	iorder_Evals <- match(runEvalIDs2, table = runEvalIDs)
+
+	save(runRequests, runRequestIDs, iorder_runRequests, runEvals, runEvalIDs, iorder_Evals, file = ftemp)
 }
 
 runFolders <- apply(unique(runEvals[, c("models", "types")]), 1, paste, collapse = "_")
@@ -586,7 +598,9 @@ if (do.Complexity) {
 					paste0("Complexity_CompTimeTotal", seq_along(pred_vars), ".png"))
 	
 	for (iv in seq_along(resp)) for (ipred in seq_along(pred_vars))
-		plot_complexity(preds = pred_vars[[ipred]], y = complexity[, resp[iv]], ylab = ylabs[[iv]], ylog = ylogs[[iv]], fname = fnames[[iv]][ipred])
+		plot_complexity(data = complexity[iorder_runRequests, ], preds = pred_vars[[ipred]],
+						y_name = resp[iv], ylab = ylabs[[iv]], ylog = ylogs[[iv]], fname = fnames[[iv]][ipred],
+						outliers = FALSE, boxes = FALSE)
 
 	print(paste(Sys.time(), ": Model complexity done"))
 }
