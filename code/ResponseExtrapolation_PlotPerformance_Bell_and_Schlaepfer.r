@@ -39,9 +39,8 @@
 	
 		plot(dat[subset, meanCol], axes=FALSE, frame.plot=TRUE, xlab = "", ylab = "",
 				xlim = c(dividers[1] - exx, tail(dividers, n = 1) + exx), ylim = c(min(ynegs), max(ypos)),
-				pch = pchs, col = cols, cex = cex)
-		arrows(1:nrow(dat), ynegs[subset], 1:nrow(dat), ypos[subset],
-				angle = 90, code = 3, length = .05, col = cols)
+				pch = pchs[subset], col = cols[subset], cex = cex)
+		arrows(1:N, ynegs[subset], 1:N, ypos[subset], angle = 90, code = 3, length = .05, col = cols[subset])
 	
 		mtext(side = 2, line = 2, text = ylab, xpd = NA)
 	
@@ -51,9 +50,9 @@
 	}
 
 	get_pchs <- function(data, col1 = "Model", col2 = "Int") {
-		temp <- expand.grid(levels(data[, col2]), levels(data[, col1]))[, 2:1]
+		temp <- expand.grid(levels(data[, col2]), levels(data[, col1]), stringsAsFactors = FALSE)[, 2:1]
 		ptemp <- list(c(0, 15), c(1, 16), c(2, 17), c(5, 18), c(8, 11))
-		pch_ids <- data.frame(temp, pch = unlist(ptemp)[1:nrow(temp)])
+		pch_ids <- data.frame(temp, pch = unlist(ptemp)[1:nrow(temp)], stringsAsFactors = FALSE)
 		pchs <- rep(NA, nrow(data))
 		for (i in 1:nrow(pch_ids)) {
 			pchs[as.character(data[, col1]) == pch_ids[i, 1] & as.character(data[, col2]) == pch_ids[i, 2]] <- pch_ids[i, "pch"]
@@ -63,7 +62,7 @@
 	}
   
 	get_cols <- function(data, col1 = "Error") {
-		temp <- expand.grid(levels(data[, col1]))
+		temp <- expand.grid(levels(data[, col1]), stringsAsFactors = FALSE)
 		ptemp <- c("black", "darkred", "gray40", "red")
 		col_ids <- data.frame(temp, col = unlist(ptemp)[1:nrow(temp)], stringsAsFactors = FALSE)
 		cols <- rep(NA, nrow(data))
@@ -80,7 +79,12 @@
 		temp <- c('Source', 'Model', 'Int')
 		sort_header <- c(temp, col_header[!(col_header %in% temp)])
 		
-		data <- cbind(t(matrix(unlist(strsplit(as.character(data[, 1]), '_')), nrow = n_header)), data[, -1])
+		header <- t(matrix(unlist(strsplit(as.character(data[, 1]), '_')), nrow = n_header))
+		for (i in seq_along(mlevels)) header <- gsub(names(mlevels)[i], mlevels_labels[i], header)
+		header <- data.frame(header, stringsAsFactors = FALSE)
+		for (i in seq_len(ncol(header))) header[, i] <- factor(header[, i], levels = unique(header[, i]), ordered = TRUE)
+		
+		data <- data.frame(header, data[, -1])
 		colnames(data) <- c(col_header, colnames(data)[-(1:n_header)])
 		data[do.call(order, data[, sort_header]), ]
 	}
@@ -88,30 +92,124 @@
 
 #---Loop through aggregation levels and draw figures
 	collapse.levels <- c("full", "collerr")
+	subset.panels <- list(all = list(evals = c(eval_disc.methods[c(1, 3, 2)], eval_cont.methods),
+									 regs = reg.sort),
+						  fig3 = list(evals = c("TSS", "RMSE"),
+						  			 regs = reg.sort[c("NR", "SR")]))
 	
 	for (colllev in collapse.levels) {
 		include_error <- switch(EXPR = colllev, full = TRUE, collerr = FALSE)
 	
 		#---Load data  
-		model.perf <- read.csv(file.path(dir.tables, paste0('Table_EvaluationModels_', colllev, '.csv')), header = TRUE)
-		model.perf <- convert_data(model.perf, include_region = FALSE, include_error = include_error)
-		
 		proj.perf <- read.csv(file.path(dir.tables, paste0('Table_EvaluationProjections_', colllev, '.csv')), header = TRUE)
-		proj.perf <- convert_data(proj.perf, include_region = TRUE, include_error = include_error)
+		proj.perf <- convert_data(proj.perf[iorder_runEvals3, ], include_region = TRUE, include_error = include_error)
   
 		projDiff.perf <- read.csv(file.path(dir.tables, paste0('Table_EvaluationDifferencesProjections_', colllev, '.csv')), header = TRUE)
-		projDiff.perf <- convert_data(projDiff.perf, include_region = TRUE, include_error = include_error)
-
+		projDiff.perf <- convert_data(projDiff.perf[iorder_runEvals3, ], include_region = TRUE, include_error = include_error)
 
 		#---Prepare plotting information
-		n_units <- nrow(unique(model.perf[, seq_len(if (include_error) 4 else 3)]))
-		pchs <- get_pchs(model.perf, col1 = "Model", col2 = "Int")
-		cols <- get_cols(model.perf, col1 = if (include_error) "Error" else "Int")
-		
+		n_units <- nrow(unique(proj.perf[, c("Source", "Int", "Model", if (include_error) "Error")]))
+		pchs <- get_pchs(proj.perf, col1 = "Model", col2 = "Int")
+		cols <- get_cols(proj.perf, col1 = if (include_error) "Error" else "Int")
+	
 		cex <- 1
 		h.panel <- 2.6
 		w.panel <- 0.075 * n_units
 
+
+		for (isp in seq_along(subset.panels)) {
+			#---FIGURE 3. REGIONAL MODEL PERFORMANCE; ABSOLUTE FOR TRAINING REGION; RELATIVE FOR PROJECTION REGIONS
+			temp <- subset.panels[[isp]][["evals"]]
+			meanCols <- paste(temp, "mean", sep = "_")
+			sdCols <- paste(temp, "sd", sep = "_")
+			ylabels <- nice_eval_labels(temp)
+			ylabelsDiff <- sapply(ylabels, function(x) {
+								if (grepl("expression", x)) {
+									temp <- strsplit(strsplit(x, ")", fixed = TRUE)[[1]], "(", fixed = TRUE)[[1]]
+									paste0(temp[1], "(paste(", temp[2], ", ' Difference'))")
+								} else {
+									paste(x, "Difference")
+								}
+							})
+	
+			npanelsX <- length(subset.panels[[isp]][["regs"]]); npanelsY <- length(ylabels)
+			h.edge_lo <- 0.5; h.edge_up <- 0.2
+			w.edge_left <- 0.55; w.edge_right <- 0.0
+			panels <- matrix(0, nrow = 1 + npanelsY + 1, ncol = 2 + npanelsX + 1, byrow=FALSE)
+			panels[-c(1, nrow(panels)), -c(1, 3, ncol(panels))] <- 1:(npanelsX * npanelsY)
+
+			png(height = h.edge_lo + h.panel * npanelsY + h.edge_up,
+				width = 2 * w.edge_left + w.panel * npanelsX + w.edge_right, units = "in",
+				res = 600, file = file.path(dir.figs,
+				paste0('Fig3_Performance_Training_Transferability_', colllev, '_', names(subset.panels)[isp], '.png')))
+
+			layout(panels,
+					heights = c(h.edge_up, rep(h.panel, times = npanelsY), h.edge_lo),
+					widths = c(w.edge_left, w.panel, w.edge_left, rep(w.panel, times = npanelsX - 1), w.edge_right))
+			op_old <- par(mgp = c(2, 0.25, 0), mar = c(0.2, 0.2, 0.2, 0.2),
+							tcl = 0.3, cex = cex, xaxs = "i")
+	
+			for (j in seq_along(subset.panels[[isp]][["regs"]])) {
+				rsubset <- as.character(proj.perf[, "Region"]) == paste0("region", subset.panels[[isp]][["regs"]][j])
+		
+				for (i in seq_along(meanCols)) {
+					dats <- if (subset.panels[[isp]][["regs"]][j] == baseRegion) proj.perf else projDiff.perf
+					ylab <- if (j == 1) ylabels[i] else if (j == 2) ylabelsDiff[i] else ""
+	
+					divs <- draw.panel(dat = dats, meanCol = meanCols[i], sdCol = sdCols[i],
+										pchs = pchs$pchs, cols = cols$cols,
+										subset = rsubset, divCol = "Source", ylab = ylab, cex = cex)
+			
+					if (j %in% 1:2) add_yaxis(j == 1)
+				
+					if (j > 1) abline(h = 0, lty = 2, col = "gray")
+		
+					if (i == 1) {
+						mtext(unique(proj.perf[, "Source"]), side = 3, at = zoo::rollmean(divs, 2), cex = cex)
+				
+						if (j == 1) {
+							if (all(as.character(cols$col_ids[, 1]) %in% as.character(pchs$pch_ids[, 2]))) {
+								legend("bottomright", legend = apply(pchs$pch_ids[, 1:2], 1, paste, collapse = "; "),
+												ncol = 2, pch = pchs$pch_ids[, "pch"], bg = "white", cex = 0.75 * cex,
+														  col = cols$col_ids[, "col"])
+		
+							} else {
+								legend("bottomright", legend = apply(pchs$pch_ids[, 1:2], 1, paste, collapse = "; "),
+												ncol = 3, pch = pchs$pch_ids[, "pch"], bg = "white", cex = 0.75 * cex)
+		
+								legend("bottomright", inset = c(0.45, 0), legend = cols$col_ids[, 1],
+												ncol = 2, fill = cols$col_ids[, "col"], bg = "white", cex = 0.75 * cex)
+							}
+						}
+					}
+			
+					if (i == length(meanCols)) {
+						mtext(names(subset.panels[[isp]][["regs"]])[j], side = 1, at = mean(divs), cex = cex)
+				
+						mtemp <- if (subset.panels[[isp]][["regs"]][j] == baseRegion) {
+										"Training Region"
+									} else if (j == 1 + round((length(subset.panels[[isp]][["regs"]]) - 1) / 2)) {
+										"Transferability Regions"
+									} else ""
+						mtext(mtemp, side = 1, at = mean(divs), line = 1, cex = cex)
+					}
+				}
+			}
+	
+			par(op_old)
+			dev.off()
+		}
+	} 
+
+
+
+
+warning("Not all figures of 'ResponseExtrapolation_PlotPerformance_Bell_and_Schlaepfer' re-implemented")
+if (FALSE) {
+
+		model.perf <- read.csv(file.path(dir.tables, paste0('Table_EvaluationModels_', colllev, '.csv')), header = TRUE)
+		model.perf <- convert_data(model.perf[iorder_runEvals, ], include_region = FALSE, include_error = include_error)
+		
 
 		#---FIGURE. MODEL PERFORMANCE IN TRAINING REGION
 		temp <- eval_disc.methods[c(1, 3, 2)]
@@ -155,85 +253,8 @@
 	
 		par(op_old)
 		dev.off()
-  
+ 
 
-  
-		#---FIGURE 3. REGIONAL MODEL PERFORMANCE; ABSOLUTE FOR TRAINING REGION; RELATIVE FOR PROJECTION REGIONS
-		temp <- c(eval_disc.methods[c(1, 3, 2)], eval_cont.methods)
-		meanCols <- paste(temp, "mean", sep = "_")
-		sdCols <- paste(temp, "sd", sep = "_")
-		ylabels <- nice_eval_labels(temp)
-		ylabelsDiff <- sapply(ylabels, function(x) {
-							if (grepl("expression", x)) {
-								temp <- strsplit(strsplit(x, ")", fixed = TRUE)[[1]], "(", fixed = TRUE)[[1]]
-								paste0(temp[1], "(paste(", temp[2], ", ' Difference'))")
-							} else {
-								paste(x, "Difference")
-							}
-						})
-	
-		npanelsX <- length(regions); npanelsY <- length(ylabels)
-		h.edge_lo <- 0.5; h.edge_up <- 0.2
-		w.edge_left <- 0.55; w.edge_right <- 0.0
-		panels <- matrix(0, nrow = 1 + npanelsY + 1, ncol = 2 + npanelsX + 1, byrow=FALSE)
-		panels[-c(1, nrow(panels)), -c(1, 3, ncol(panels))] <- 1:(npanelsX * npanelsY)
-
-		png(height = h.edge_lo + h.panel * npanelsY + h.edge_up,
-			width = 2 * w.edge_left + w.panel * npanelsX + w.edge_right, units = "in",
-			res = 600, file = file.path(dir.figs, paste0('Fig3_Performance_Training_Transferability_', colllev, '.png')))
-
-		layout(panels,
-				heights = c(h.edge_up, rep(h.panel, times = npanelsY), h.edge_lo),
-				widths = c(w.edge_left, w.panel, w.edge_left, rep(w.panel, times = npanelsX - 1), w.edge_right))
-		op_old <- par(mgp = c(2, 0.25, 0), mar = c(0.2, 0.2, 0.2, 0.2),
-						tcl = 0.3, cex = cex, xaxs = "i")
-	
-		for (j in seq_along(reg.sort)) {
-			rsubset <- proj.perf[, "Region"] == paste0("region", reg.sort[j])
-		
-			for (i in seq_along(meanCols)) {
-				dats <- if (reg.sort[j] == baseRegion) proj.perf else projDiff.perf
-				ylab <- if (j == 1) ylabels[i] else if (j == 2) ylabelsDiff[i] else ""
-	
-				divs <- draw.panel(dat = dats, meanCol = meanCols[i], sdCol = sdCols[i],
-									pchs = pchs$pchs, cols = cols$cols,
-									subset = rsubset, divCol = "Source", ylab = ylab, cex = cex)
-			
-				if (j %in% 1:2) add_yaxis(j == 1)
-				
-				if (j > 1) abline(h = 0, lty = 2, col = "gray")
-		
-				if (i == 1) {
-					mtext(unique(proj.perf[, "Source"]), side = 3, at = zoo::rollmean(divs, 2), cex = cex)
-				
-					if (j == 1) {
-						legend("bottomright", legend = apply(pchs$pch_ids[, 1:2], 1, paste, collapse = "; "),
-										ncol = 3, pch = pchs$pch_ids[, "pch"], bg = "white", cex = 0.75 * cex)
-		
-						legend("bottomright", inset = c(0.45, 0), legend = cols$col_ids[, 1],
-										ncol = 2, fill = cols$col_ids[, "col"], bg = "white", cex = 0.75 * cex)
-					}
-				}
-			
-				if (i == length(meanCols)) {
-					mtext(names(reg.sort)[j], side = 1, at = mean(divs), cex = cex)
-				
-					mtemp <- if (reg.sort[j] == baseRegion) {
-									"Training Region"
-								} else if (j == 1 + round((length(reg.sort) - 1) / 2)) {
-									"Transferability Regions"
-								} else ""
-					mtext(mtemp, side = 1, at = mean(divs), line = 1, cex = cex)
-				}
-			}
-		}
-	
-		par(op_old)
-		dev.off()
-	} 
-
-warning("Not all figures of 'ResponseExtrapolation_PlotPerformance_Bell_and_Schlaepfer' re-implemented")
-if (FALSE) {
 	#####################
 	postscript('Projection.Performance.eps',width=18,height=9,onefile=FALSE,horizontal=FALSE)
 	par(mfrow=c(length(meanCols),length(regions)),mar=c(2,5,2,1))

@@ -129,17 +129,24 @@ if (action == "continue" && file.exists(ftemp)) {
 		colnames(runRequests2) <- c("errors", "types", "mlevels", "models", "realizations", "run")
 		runRequests2 <- runRequests2[, c(4:1, 5:6)]
 	}
+
 	runRequestIDs <- apply(runRequests, MARGIN = 1, function(x) paste0("SDM_", paste(trimws(x), collapse = "_")))
 	runRequestIDs2 <- apply(runRequests2, MARGIN = 1, function(x) paste0("SDM_", paste(trimws(x), collapse = "_")))
 	iorder_runRequests <- match(runRequestIDs2, table = runRequestIDs)
 	
 	runEvals <- unique(runRequests[, c("models", "mlevels", "types", "errors")]) #get the unique combinations of model, type, and mlevel
 	runEvalIDs <- apply(runEvals, MARGIN = 1, function(x) paste0("Eval_", paste(trimws(x), collapse = "_")))
-	runEvals2 <- unique(runRequests2[, c("models", "mlevels", "types", "errors")]) #get the unique combinations of model, type, and mlevel
+	runEvals2 <- unique(runRequests2[, c("models", "mlevels", "types", "errors")])
 	runEvalIDs2 <- apply(runEvals2, MARGIN = 1, function(x) paste0("Eval_", paste(trimws(x), collapse = "_")))
-	iorder_Evals <- match(runEvalIDs2, table = runEvalIDs)
+	iorder_runEvals2 <- match(runEvalIDs2, table = runEvalIDs)
 
-	save(runRequests, runRequestIDs, iorder_runRequests, runEvals, runEvalIDs, iorder_Evals, file = ftemp)
+	runEvals3 <- expand.grid(errors, names(mlevels), types, models_sort_labels, stringsAsFactors=FALSE, KEEP.OUT.ATTRS=FALSE)
+	colnames(runEvals3) <- c("errors", "mlevels", "types", "models")
+	runEvals3 <- runEvals3[, c(4, 2, 3, 1)]
+	runEvalIDs3 <- apply(runEvals3, MARGIN = 1, function(x) paste0("Eval_", paste(trimws(x), collapse = "_")))
+	iorder_runEvals3 <- match(runEvalIDs3, table = runEvalIDs)
+
+	save(runRequests, runRequestIDs, iorder_runRequests, runEvals, runEvalIDs, iorder_runEvals2, iorder_runEvals3, file = ftemp)
 }
 
 runFolders <- apply(unique(runEvals[, c("models", "types")]), 1, paste, collapse = "_")

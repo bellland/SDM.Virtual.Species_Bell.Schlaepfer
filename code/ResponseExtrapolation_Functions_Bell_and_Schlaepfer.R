@@ -1111,7 +1111,7 @@ plot_complexity <- function(data, preds, y_name, ylab, ylog, fname, outliers = T
 	
 	# plot
 	png(filename = ftemp, width = pwidth, height = pheight, units="in", res=600)
-	op <- par(mar = c(0.75 + ceiling(nchar_xlab / par("cin")[2]), 4, 1, 1))
+	op <- par(mar = c(0.75 + ceiling(nchar_xlab / par("cin")[2]), 4, 1, 1), tcl = 0.3)
 	tmp <- if (boxes) {
 				boxplot(data[, y_name] ~ xcats, outline = outliers,
 					log = if (ylog) "y" else "", ylim = ylim, axes=FALSE, frame.plot=TRUE)
@@ -1122,8 +1122,16 @@ plot_complexity <- function(data, preds, y_name, ylab, ylog, fname, outliers = T
 			}
 	if (!inherits(tmp, "try-error")) {
 		axis(2)
-		axis(1, at = seq_len(ncats), labels = cats, las = 3, cex.axis = xcex)
 		mtext(ylab, side = 2, line = 2.5)
+		axis(1, at = seq_len(ncats), labels = FALSE)
+		if (ylog) {
+			usr <- 10 ^ par("usr")[3:4]
+			ylab_axis1 <- (1 - 2e-1) * usr[1]
+		} else {
+			usr <- par("usr")[3:4]
+			ylab_axis1 <- usr[1] - 2.5e-2 * diff(usr)
+		}
+		text(x = seq_len(ncats), y = ylab_axis1, labels = cats, adj = c(1, 0), offset = 0, srt = 60, cex = xcex, xpd = NA)
 	}
 	par(op)
 	dev.off()
