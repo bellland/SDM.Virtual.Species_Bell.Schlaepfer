@@ -1,6 +1,6 @@
 ###############################################################################
 #
-# Bell, D. M., and D. R. Schlaepfer. Impacts of the data-generating processes and species distribution model complexity on ecological fidelity and global change predictions.
+# Bell, D. M., and D. R. Schlaepfer. On the dangers of model complexity without ecological justification in species distribution modeling.
 #
 #    This program is distributed in the hope that it will be useful,
 #    but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -645,7 +645,8 @@ if (do.Extrapolation) {
 	NT2rast <- rasterize(x = proxy, y = rall, field = NT2)
 
 	# Plot the raster layers
-	plot_extrapolation(NT1rast, NT2rast, file = file.path(dir.maps, "Extrapolation.png"))
+	plot_extrapolation(NT1rast, NT2rast, bw = TRUE, file = file.path(dir.maps, "Extrapolation_bw.png"))
+	plot_extrapolation(NT1rast, NT2rast, bw = FALSE, file = file.path(dir.maps, "Extrapolation_col.png"))
 	
 }
 

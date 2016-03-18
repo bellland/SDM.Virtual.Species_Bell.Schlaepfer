@@ -1,6 +1,6 @@
 ###############################################################################
 #
-# Bell, D. M., and D. R. Schlaepfer. Impacts of the data-generating processes and species distribution model complexity on ecological fidelity and global change predictions.
+# Bell, D. M., and D. R. Schlaepfer. On the dangers of model complexity without ecological justification in species distribution modeling.
 #
 #    This program is distributed in the hope that it will be useful,
 #    but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -1186,7 +1186,7 @@ calc_NT2 <- function(refdat, prodat) {
 	NT2 <- mah.pro / mah.max
 }
 
-plot_extrapolation <- function(NT1rast, NT2rast, file) {
+plot_extrapolation <- function(NT1rast, NT2rast, bw = FALSE, file) {
 #——————————————————————–#
 # Plot the extrapolation rasters
 #——————————————————————–#
@@ -1199,11 +1199,19 @@ plot_extrapolation <- function(NT1rast, NT2rast, file) {
 	zlim2 <- c(0, nt2_max)
 	blegend <- c(-95, -93.5, 30, 48)
 
-	cols_sim <- colorRampPalette(c("gray", "darkslategray1"))
-	cols_diss <- colorRampPalette(c("gold1", "orange", "red", "darkred", "purple"))
+	if (bw) {
+		col_base <- "white"
+		cols_sim <- colorRampPalette(c("white", "gray90"))
+		cols_diss <- colorRampPalette(c("gray70", "black"))
+	} else {
+		col_base <- "blue"
+		cols_sim <- colorRampPalette(c("gray", "darkslategray1"))
+		cols_diss <- colorRampPalette(c("gold1", "orange", "red", "darkred", "purple"))
+	}
+	
 	cols_NT1 <- cols_NT2 <- list()
 	cols_NT1[["added_below"]] <- cols_NT1[["added_above"]] <- FALSE
-	cols_NT1[["colors_label"]] <- rev(c("gray", cols_diss(n = length(n) - 1)))
+	cols_NT1[["colors_label"]] <- rev(c(cols_sim(1), cols_diss(n = length(n) - 1)))
 	cols_NT2[["added_below"]] <- cols_NT2[["added_above"]] <- FALSE
 	cols_NT2[["colors_label"]] <- c(cols_sim(n = n1), cols_diss(n = length(n) - n1))
 
@@ -1226,14 +1234,14 @@ plot_extrapolation <- function(NT1rast, NT2rast, file) {
 
 		raster::image(NT1rast, asp = 1, zlim = zlim1, col = cols_NT1[["colors_label"]], xlab = "", ylab = "", axes = FALSE)
 		add_legend(zlim = zlim1, zextreme = zlim1, col_desc = cols_NT1, grid = NT1rast, box = blegend, cex = 0.85)
-		raster::image(rbaseRegion, col = "darkgray", add = TRUE)
+		raster::image(rbaseRegion, col = col_base, add = TRUE)
 		plot(allborders, add = TRUE)
 		axis(2)
 		mtext(text = "(a)", line = -1, adj = 0.05, font = 2)
 
 		raster::image(NT2rast, asp = 1, zlim = zlim2, col = cols_NT2[["colors_label"]], xlab = "", ylab = "", axes = FALSE)
 		add_legend(zlim = zlim2, zextreme = zlim2, col_desc = cols_NT2, grid = NT2rast, box = blegend, cex = 0.85)
-		image(rbaseRegion, col = "darkgray", add = TRUE)
+		image(rbaseRegion, col = col_base, add = TRUE)
 		plot(allborders, add = TRUE)
 		axis(1); axis(2)
 		mtext(text = "(b)", line = -1, adj = 0.05, font = 2)
